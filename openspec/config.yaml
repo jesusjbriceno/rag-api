@@ -1,0 +1,46 @@
+schema: spec-driven
+
+context: |
+  Project: rag-api, a public, consumer-agnostic RAG service.
+  Stack baseline: .NET, ASP.NET Core, PostgreSQL with pgvector, Npgsql, EF Core where useful.
+  Architecture baseline: modular monolith with API, Application, Domain, Processing, Embeddings, Persistence, and Content Store boundaries.
+  Processing: hosted background worker for load, parse, normalize, chunk, embed, and index.
+  Style: English technical artifacts; validate proposed architecture before implementation; preserve Deferred decisions.
+  Foundational context: .proposals/*.md.
+
+strict_tdd: false
+
+testing:
+  runner: unavailable
+  command: ""
+  framework: ""
+  layers:
+    unit: unavailable
+    integration: unavailable
+    e2e: unavailable
+  coverage:
+    available: false
+    command: ""
+  quality:
+    linter: unavailable
+    type_checker: unavailable
+    formatter: unavailable
+
+rules:
+  proposal:
+    - State intent, scope, alternatives, and rollback considerations for risky changes.
+  specs:
+    - Use Given/When/Then scenarios and RFC 2119 keywords.
+  design:
+    - Document boundaries, dependency direction, and rationale for architecture decisions.
+  tasks:
+    - Group tasks by phase and keep each task completable in one session.
+  apply:
+    tdd: false
+    test_command: ""
+  verify:
+    test_command: ""
+    build_command: ""
+    coverage_threshold: 0
+  archive:
+    - Preserve the audit trail and warn before destructive spec merges.

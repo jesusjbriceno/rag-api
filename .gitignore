@@ -1,0 +1,5 @@
+# Se excluye la carpeta de propuestas
+.proposals
+
+# Codegraph
+.codegraph
