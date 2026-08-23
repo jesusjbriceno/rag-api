@@ -14,6 +14,8 @@ public sealed class IngestionDbContext(DbContextOptions<IngestionDbContext> opti
 
     public DbSet<Operation> Operations => Set<Operation>();
 
+    public DbSet<Chunk> Chunks => Set<Chunk>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.Entity<Collection>(builder =>
@@ -91,6 +93,25 @@ public sealed class IngestionDbContext(DbContextOptions<IngestionDbContext> opti
             builder.HasOne<DocumentVersion>()
                 .WithMany()
                 .HasForeignKey(operation => operation.DocumentVersionId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<Chunk>(builder =>
+        {
+            builder.ToTable("chunks");
+            builder.HasKey(chunk => chunk.Id);
+            builder.Property(chunk => chunk.Ordinal).IsRequired();
+            builder.Property(chunk => chunk.Text).HasMaxLength(2_000).IsRequired();
+            builder.HasIndex(chunk => new { chunk.DocumentVersionId, chunk.Ordinal }).IsUnique();
+            builder.ToTable(table => table.HasCheckConstraint(
+                "CK_chunks_Ordinal_positive",
+                "\"Ordinal\" > 0"));
+            builder.ToTable(table => table.HasCheckConstraint(
+                "CK_chunks_Text_normalized",
+                "char_length(\"Text\") BETWEEN 1 AND 2000 AND \"Text\" = btrim(\"Text\", U&'\\0009\\000A\\000B\\000C\\000D\\0020\\0085\\00A0\\1680\\2000\\2001\\2002\\2003\\2004\\2005\\2006\\2007\\2008\\2009\\200A\\2028\\2029\\202F\\205F\\3000') AND position(E'\\r' in \"Text\") = 0"));
+            builder.HasOne<DocumentVersion>()
+                .WithMany()
+                .HasForeignKey(chunk => chunk.DocumentVersionId)
                 .OnDelete(DeleteBehavior.Cascade);
         });
     }

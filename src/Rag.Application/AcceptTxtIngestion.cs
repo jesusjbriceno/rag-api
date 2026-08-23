@@ -41,6 +41,8 @@ public interface IImmutableContentStore
 {
     Task StoreAsync(ContentReference reference, ContentHash contentHash, ReadOnlyMemory<byte> content, CancellationToken cancellationToken);
 
+    Task<byte[]> ReadAsync(ContentReference reference, ContentHash contentHash, CancellationToken cancellationToken);
+
     Task DeleteAsync(ContentReference reference, CancellationToken cancellationToken);
 }
 

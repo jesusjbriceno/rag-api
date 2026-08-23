@@ -172,6 +172,9 @@ public sealed class IngestionReliabilityTests(PostgreSqlFixture fixture)
             _barrier.SignalAndWait(cancellationToken);
         }
 
+        public Task<byte[]> ReadAsync(ContentReference reference, ContentHash contentHash, CancellationToken cancellationToken) =>
+            inner.ReadAsync(reference, contentHash, cancellationToken);
+
         public Task DeleteAsync(ContentReference reference, CancellationToken cancellationToken) =>
             inner.DeleteAsync(reference, cancellationToken);
 

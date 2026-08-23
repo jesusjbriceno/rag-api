@@ -76,4 +76,37 @@ public sealed class IngestionDbContextTests(PostgreSqlFixture fixture)
         Assert.Equal("23514", exception.SqlState);
         Assert.Equal("CK_documents_CurrentVersion_valid", exception.ConstraintName);
     }
+
+    [Fact]
+    public async Task PostgreSql_rejects_tabs_and_newlines_at_chunk_text_boundaries()
+    {
+        var options = new DbContextOptionsBuilder<IngestionDbContext>()
+            .UseNpgsql(fixture.ConnectionString)
+            .Options;
+        await using var context = new IngestionDbContext(options);
+
+        await context.Database.MigrateAsync();
+        await context.Database.ExecuteSqlRawAsync("TRUNCATE TABLE operations, chunks, document_versions, documents, collections CASCADE;");
+        var now = DateTimeOffset.UtcNow;
+        var collection = new Collection(Guid.NewGuid(), "Integration collection", now);
+        var document = new Document(Guid.NewGuid(), collection.Id, "source://chunk-whitespace", now);
+        var version = document.AddVersion(
+            Guid.NewGuid(),
+            "chunk-whitespace.txt",
+            ContentHash.FromBytes("content"u8),
+            ContentReference.ForVersion(Guid.NewGuid()),
+            now);
+        context.Collections.Add(collection);
+        context.Documents.Add(document);
+        await context.SaveChangesAsync();
+
+        foreach (var text in new[] { "\ttext", "text\t", "\ntext", "text\n" })
+        {
+            var exception = await Assert.ThrowsAsync<PostgresException>(() => context.Database.ExecuteSqlInterpolatedAsync(
+                $"INSERT INTO chunks (\"Id\", \"DocumentVersionId\", \"Ordinal\", \"Text\") VALUES ({Guid.NewGuid()}, {version.Id}, 1, {text});"));
+
+            Assert.Equal("23514", exception.SqlState);
+            Assert.Equal("CK_chunks_Text_normalized", exception.ConstraintName);
+        }
+    }
 }

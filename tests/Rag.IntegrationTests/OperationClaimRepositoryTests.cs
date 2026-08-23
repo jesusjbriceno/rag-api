@@ -140,13 +140,13 @@ public sealed class OperationClaimRepositoryTests(PostgreSqlFixture fixture)
     }
 
     [Fact]
-    public async Task Hosted_worker_claims_and_defers_without_marking_an_operation_succeeded()
+    public async Task Hosted_worker_claims_and_invokes_its_processor()
     {
         var options = CreateOptions();
         await ResetDatabaseAsync(options);
         var now = DateTimeOffset.UtcNow;
         var operationId = Assert.Single(await AddOperationsAsync(options, now, count: 1));
-        var processor = new RecordingDeferredProcessor();
+        var processor = new RecordingProcessor();
         var worker = new OperationWorker(
             new OperationClaimRepository(new TestDbContextFactory(options)),
             processor,
@@ -251,14 +251,14 @@ public sealed class OperationClaimRepositoryTests(PostgreSqlFixture fixture)
             Task.FromResult(new IngestionDbContext(options));
     }
 
-    private sealed class RecordingDeferredProcessor : IOperationProcessor
+    private sealed class RecordingProcessor : IOperationProcessor
     {
         public TaskCompletionSource<Guid> ProcessedOperationId { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public Task<OperationProcessingDisposition> ProcessAsync(Operation operation, CancellationToken cancellationToken)
         {
             ProcessedOperationId.TrySetResult(operation.Id);
-            return Task.FromResult(OperationProcessingDisposition.Deferred);
+            return Task.FromResult(OperationProcessingDisposition.LeaseLost);
         }
     }
 }

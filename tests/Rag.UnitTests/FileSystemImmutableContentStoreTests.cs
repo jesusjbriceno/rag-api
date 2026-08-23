@@ -31,6 +31,33 @@ public sealed class FileSystemImmutableContentStoreTests
     }
 
     [Fact]
+    public async Task Read_returns_the_exact_content_only_when_the_version_hash_matches()
+    {
+        var rootPath = Path.Combine(Path.GetTempPath(), $"rag-content-store-{Guid.NewGuid():N}");
+        try
+        {
+            var store = new FileSystemImmutableContentStore(rootPath);
+            var reference = ContentReference.ForVersion(Guid.NewGuid());
+            var content = "version content"u8.ToArray();
+            var hash = ContentHash.FromBytes(content);
+            await store.StoreAsync(reference, hash, content, CancellationToken.None);
+
+            var read = await store.ReadAsync(reference, hash, CancellationToken.None);
+
+            Assert.Equal(content, read);
+            await Assert.ThrowsAsync<IOException>(() =>
+                store.ReadAsync(reference, ContentHash.FromBytes("another version"u8), CancellationToken.None));
+        }
+        finally
+        {
+            if (Directory.Exists(rootPath))
+            {
+                Directory.Delete(rootPath, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
     public async Task Unsafe_content_reference_is_rejected_before_writing()
     {
         var rootPath = Path.Combine(Path.GetTempPath(), $"rag-content-store-{Guid.NewGuid():N}");

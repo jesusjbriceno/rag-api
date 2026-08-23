@@ -31,7 +31,9 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddScoped<IIngestionRepository, IngestionRepository>();
         services.AddSingleton<IImmutableContentStore>(_ => new FileSystemImmutableContentStore(contentRoot));
         services.AddSingleton<IOperationClaimRepository, OperationClaimRepository>();
-        services.AddSingleton<IOperationProcessor, DeferredOperationProcessor>();
+        services.AddSingleton<IOperationCompletionRepository, OperationCompletionRepository>();
+        services.AddSingleton<TxtChunker>();
+        services.AddSingleton<IOperationProcessor, TxtOperationProcessor>();
         services.AddHostedService<OperationWorker>();
         return services;
     }

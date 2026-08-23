@@ -95,6 +95,24 @@ public sealed class FileSystemImmutableContentStore(string rootPath) : IImmutabl
         return Task.CompletedTask;
     }
 
+    public async Task<byte[]> ReadAsync(ContentReference reference, ContentHash contentHash, CancellationToken cancellationToken)
+    {
+        var fileName = ResolveFileName(reference);
+        EnsureLinux();
+        using var rootDirectory = OpenRootDirectory();
+        using var versionsDirectory = OpenOrCreateVersionsDirectory(rootDirectory);
+        await using var stream = OpenExistingFile(versionsDirectory, fileName);
+        using var memory = new MemoryStream();
+        await stream.CopyToAsync(memory, cancellationToken);
+        var content = memory.ToArray();
+        if (ContentHash.FromBytes(content) != contentHash)
+        {
+            throw new IOException("The immutable content does not match its expected hash.");
+        }
+
+        return content;
+    }
+
     private static async Task VerifyHashAsync(SafeFileHandle directory, string fileName, ContentHash expectedHash, CancellationToken cancellationToken)
     {
         await using var stream = OpenExistingFile(directory, fileName);

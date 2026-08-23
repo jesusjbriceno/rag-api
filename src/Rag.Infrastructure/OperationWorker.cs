@@ -17,17 +17,6 @@ public sealed class OperationWorkerOptions
     public string? WorkerId { get; init; }
 }
 
-public sealed class DeferredOperationProcessor(ILogger<DeferredOperationProcessor> logger) : IOperationProcessor
-{
-    public Task<OperationProcessingDisposition> ProcessAsync(Operation operation, CancellationToken cancellationToken)
-    {
-        logger.LogWarning(
-            "Operation {OperationId} was deferred because no content processor is implemented; its lease will expire for a future worker slice.",
-            operation.Id);
-        return Task.FromResult(OperationProcessingDisposition.Deferred);
-    }
-}
-
 public sealed class OperationWorker(
     IOperationClaimRepository operationClaims,
     IOperationProcessor processor,

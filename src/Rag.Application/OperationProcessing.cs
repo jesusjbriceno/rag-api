@@ -4,7 +4,9 @@ namespace Rag.Application;
 
 public enum OperationProcessingDisposition
 {
-    Deferred,
+    Succeeded,
+    Failed,
+    LeaseLost,
 }
 
 public interface IOperationProcessor

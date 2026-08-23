@@ -195,6 +195,9 @@ public sealed class AcceptTxtIngestionHandlerTests
                 : Task.CompletedTask;
         }
 
+        public Task<byte[]> ReadAsync(ContentReference reference, ContentHash contentHash, CancellationToken cancellationToken) =>
+            Task.FromException<byte[]>(new NotSupportedException());
+
         public Task DeleteAsync(ContentReference reference, CancellationToken cancellationToken)
         {
             DeleteCancellationToken = cancellationToken;
