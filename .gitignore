@@ -3,3 +3,7 @@
 
 # Codegraph
 .codegraph
+
+# .NET build artifacts
+bin/
+obj/
