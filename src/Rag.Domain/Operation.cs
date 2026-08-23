@@ -37,6 +37,10 @@ public sealed class Operation
 
     public DateTimeOffset? StartedAt { get; private set; }
 
+    public string? LeaseOwner { get; private set; }
+
+    public DateTimeOffset? LeaseExpiresAt { get; private set; }
+
     public DateTimeOffset? CompletedAt { get; private set; }
 
     public string? FailureStage { get; private set; }
@@ -45,11 +49,32 @@ public sealed class Operation
 
     public static Operation CreatePending(Guid documentVersionId, DateTimeOffset createdAt) => new(Guid.NewGuid(), documentVersionId, createdAt);
 
-    public void Start(DateTimeOffset startedAt)
+    public void Claim(string leaseOwner, DateTimeOffset claimedAt, DateTimeOffset leaseExpiresAt)
     {
-        EnsureStatus(OperationStatus.Pending);
+        if (string.IsNullOrWhiteSpace(leaseOwner))
+        {
+            throw new ArgumentException("A lease owner is required.", nameof(leaseOwner));
+        }
+
+        if (leaseExpiresAt <= claimedAt)
+        {
+            throw new ArgumentOutOfRangeException(nameof(leaseExpiresAt), "A lease must expire after it is claimed.");
+        }
+
+        if (Status == OperationStatus.Running && LeaseExpiresAt > claimedAt)
+        {
+            throw new InvalidOperationException("An active operation lease cannot be claimed.");
+        }
+
+        if (Status is not (OperationStatus.Pending or OperationStatus.Running))
+        {
+            throw new InvalidOperationException("Only pending or expired running operations can be claimed.");
+        }
+
         Status = OperationStatus.Running;
-        StartedAt = startedAt;
+        StartedAt ??= claimedAt;
+        LeaseOwner = leaseOwner.Trim();
+        LeaseExpiresAt = leaseExpiresAt;
     }
 
     public void Succeed(DateTimeOffset completedAt)
@@ -57,6 +82,7 @@ public sealed class Operation
         EnsureStatus(OperationStatus.Running);
         Status = OperationStatus.Succeeded;
         CompletedAt = completedAt;
+        ClearLease();
     }
 
     public void Fail(string stage, string message, DateTimeOffset completedAt)
@@ -71,6 +97,13 @@ public sealed class Operation
         FailureStage = stage.Trim();
         FailureMessage = message.Trim();
         CompletedAt = completedAt;
+        ClearLease();
+    }
+
+    private void ClearLease()
+    {
+        LeaseOwner = null;
+        LeaseExpiresAt = null;
     }
 
     private void EnsureStatus(OperationStatus expected)

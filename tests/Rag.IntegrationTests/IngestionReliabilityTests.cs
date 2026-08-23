@@ -86,6 +86,11 @@ public sealed class IngestionReliabilityTests(PostgreSqlFixture fixture)
             INSERT INTO operations ("Id", "DocumentVersionId", "Status", "CreatedAt")
             VALUES ('{Guid.NewGuid()}', '{first.VersionId}', 'Unexpected', '{now:O}');
             """));
+        var runningWithoutLeaseException = await Record.ExceptionAsync(() => context.Database.ExecuteSqlAsync(
+            $"""
+            INSERT INTO operations ("Id", "DocumentVersionId", "Status", "CreatedAt")
+            VALUES ('{Guid.NewGuid()}', '{first.VersionId}', 'Running', '{now:O}');
+            """));
         var danglingCurrentVersionException = await Record.ExceptionAsync(() => context.Database.ExecuteSqlAsync(
             $"UPDATE documents SET \"CurrentVersionId\" = '{Guid.NewGuid()}' WHERE \"Id\" = '{first.DocumentId}';"));
         var crossDocumentCurrentVersionException = await Record.ExceptionAsync(() => context.Database.ExecuteSqlAsync(
@@ -96,6 +101,7 @@ public sealed class IngestionReliabilityTests(PostgreSqlFixture fixture)
         Assert.NotNull(invalidNumberException);
         Assert.NotNull(invalidHashException);
         Assert.NotNull(invalidStatusException);
+        Assert.NotNull(runningWithoutLeaseException);
         Assert.NotNull(danglingCurrentVersionException);
         Assert.NotNull(crossDocumentCurrentVersionException);
         Assert.NotNull(currentVersionDeletionException);

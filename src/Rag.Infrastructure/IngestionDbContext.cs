@@ -77,11 +77,17 @@ public sealed class IngestionDbContext(DbContextOptions<IngestionDbContext> opti
             builder.Property(operation => operation.Status).HasConversion<string>().HasMaxLength(20).IsRequired();
             builder.Property(operation => operation.FailureStage).HasMaxLength(100);
             builder.Property(operation => operation.FailureMessage).HasMaxLength(2_000);
+            builder.Property(operation => operation.LeaseOwner).HasMaxLength(200);
+            builder.Property(operation => operation.LeaseExpiresAt);
             builder.Property(operation => operation.CreatedAt).IsRequired();
             builder.HasIndex(operation => operation.DocumentVersionId).IsUnique();
+            builder.HasIndex(operation => new { operation.Status, operation.LeaseExpiresAt, operation.CreatedAt });
             builder.ToTable(table => table.HasCheckConstraint(
                 "CK_operations_Status_valid",
                 "\"Status\" IN ('Pending', 'Running', 'Succeeded', 'Failed')"));
+            builder.ToTable(table => table.HasCheckConstraint(
+                "CK_operations_Lease_valid",
+                "(\"Status\" = 'Running' AND \"LeaseOwner\" IS NOT NULL AND \"LeaseExpiresAt\" IS NOT NULL) OR (\"Status\" IN ('Pending', 'Succeeded', 'Failed') AND \"LeaseOwner\" IS NULL AND \"LeaseExpiresAt\" IS NULL)"));
             builder.HasOne<DocumentVersion>()
                 .WithMany()
                 .HasForeignKey(operation => operation.DocumentVersionId)
