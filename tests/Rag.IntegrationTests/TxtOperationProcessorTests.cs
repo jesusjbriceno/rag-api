@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
+using Pgvector.EntityFrameworkCore;
 using System.Text;
 using Rag.Application;
 using Rag.Domain;
@@ -37,6 +38,9 @@ public sealed class TxtOperationProcessorTests(PostgreSqlFixture fixture)
             Assert.Equal(new[] { 1, 2 }, chunks.Select(chunk => chunk.Ordinal));
             Assert.All(chunks, chunk => Assert.Equal(setup.Version.Id, chunk.DocumentVersionId));
             Assert.Equal(new string('a', TxtChunker.OverlapCharacters), chunks[1].Text[..TxtChunker.OverlapCharacters]);
+            var embeddings = await verificationContext.ChunkEmbeddings.OrderBy(embedding => embedding.ChunkId).ToListAsync();
+            Assert.Equal(chunks.Count, embeddings.Count);
+            Assert.All(embeddings, embedding => Assert.Equal(EmbeddingProfile.Default.Dimensions, embedding.Values.ToArray().Length));
         }
         finally
         {
@@ -142,6 +146,7 @@ public sealed class TxtOperationProcessorTests(PostgreSqlFixture fixture)
             Assert.Equal(OperationStatus.Running, persistedOperation.Status);
             Assert.Equal("worker-a", persistedOperation.LeaseOwner);
             Assert.Empty(await verificationContext.Chunks.ToListAsync());
+            Assert.Empty(await verificationContext.ChunkEmbeddings.ToListAsync());
         }
         finally
         {
@@ -152,15 +157,88 @@ public sealed class TxtOperationProcessorTests(PostgreSqlFixture fixture)
         }
     }
 
-    private TxtOperationProcessor CreateProcessor(DbContextOptions<IngestionDbContext> options, string rootPath) => new(
+    [Fact]
+    public async Task Invalid_embedding_response_marks_the_operation_embed_failed_without_chunks_or_vectors()
+    {
+        var options = CreateOptions();
+        await ResetDatabaseAsync(options);
+        var rootPath = Path.Combine(Path.GetTempPath(), $"rag-content-store-{Guid.NewGuid():N}");
+        try
+        {
+            var setup = await AddClaimedOperationAsync(options, rootPath, "embedding failure"u8.ToArray(), "worker-a");
+
+            var disposition = await CreateProcessor(options, rootPath, new InvalidEmbeddingProvider()).ProcessAsync(setup.Operation, CancellationToken.None);
+
+            Assert.Equal(OperationProcessingDisposition.Failed, disposition);
+            await using var verificationContext = new IngestionDbContext(options);
+            var operation = await verificationContext.Operations.SingleAsync(item => item.Id == setup.Operation.Id);
+            Assert.Equal(OperationStatus.Failed, operation.Status);
+            Assert.Equal("embed", operation.FailureStage);
+            Assert.Empty(await verificationContext.Chunks.ToListAsync());
+            Assert.Empty(await verificationContext.ChunkEmbeddings.ToListAsync());
+        }
+        finally
+        {
+            if (Directory.Exists(rootPath))
+            {
+                Directory.Delete(rootPath, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task Persistence_failure_rolls_back_chunks_and_vectors_then_marks_the_operation_index_failed()
+    {
+        var options = CreateOptions();
+        await ResetDatabaseAsync(options);
+        var rootPath = Path.Combine(Path.GetTempPath(), $"rag-content-store-{Guid.NewGuid():N}");
+        try
+        {
+            var setup = await AddClaimedOperationAsync(options, rootPath, "persistence failure"u8.ToArray(), "worker-a");
+
+            OperationProcessingDisposition disposition;
+            try
+            {
+                disposition = await CreateProcessor(options, rootPath, new RejectingPersistenceEmbeddingProvider(options))
+                    .ProcessAsync(setup.Operation, CancellationToken.None);
+            }
+            finally
+            {
+                await using var cleanupContext = new IngestionDbContext(options);
+                await cleanupContext.Database.ExecuteSqlRawAsync(
+                    "ALTER TABLE chunk_embeddings DROP CONSTRAINT IF EXISTS \"CK_test_reject_embeddings\";");
+            }
+
+            Assert.Equal(OperationProcessingDisposition.Failed, disposition);
+            await using var verificationContext = new IngestionDbContext(options);
+            var operation = await verificationContext.Operations.SingleAsync(item => item.Id == setup.Operation.Id);
+            Assert.Equal(OperationStatus.Failed, operation.Status);
+            Assert.Equal("index", operation.FailureStage);
+            Assert.Empty(await verificationContext.Chunks.ToListAsync());
+            Assert.Empty(await verificationContext.ChunkEmbeddings.ToListAsync());
+        }
+        finally
+        {
+            if (Directory.Exists(rootPath))
+            {
+                Directory.Delete(rootPath, recursive: true);
+            }
+        }
+    }
+
+    private TxtOperationProcessor CreateProcessor(
+        DbContextOptions<IngestionDbContext> options,
+        string rootPath,
+        IEmbeddingProvider? embeddingProvider = null) => new(
         new OperationCompletionRepository(new TestDbContextFactory(options)),
         new FileSystemImmutableContentStore(rootPath),
         new TxtChunker(),
+        embeddingProvider ?? new DeterministicEmbeddingProvider(),
         NullLogger<TxtOperationProcessor>.Instance);
 
     private DbContextOptions<IngestionDbContext> CreateOptions() =>
         new DbContextOptionsBuilder<IngestionDbContext>()
-            .UseNpgsql(fixture.ConnectionString)
+            .UseNpgsql(fixture.ConnectionString, options => options.UseVector())
             .Options;
 
     private static async Task ResetDatabaseAsync(DbContextOptions<IngestionDbContext> options)
@@ -218,5 +296,30 @@ public sealed class TxtOperationProcessorTests(PostgreSqlFixture fixture)
 
         public Task<IngestionDbContext> CreateDbContextAsync(CancellationToken cancellationToken = default) =>
             Task.FromResult(new IngestionDbContext(options));
+    }
+
+    private sealed class DeterministicEmbeddingProvider : IEmbeddingProvider
+    {
+        public Task<EmbeddingResponse> EmbedAsync(EmbeddingProfile profile, IReadOnlyList<string> inputs, CancellationToken cancellationToken) =>
+            Task.FromResult(new EmbeddingResponse(inputs.Select((_, index) =>
+                Enumerable.Repeat((float)index, profile.Dimensions).ToArray()).ToArray()));
+    }
+
+    private sealed class InvalidEmbeddingProvider : IEmbeddingProvider
+    {
+        public Task<EmbeddingResponse> EmbedAsync(EmbeddingProfile profile, IReadOnlyList<string> inputs, CancellationToken cancellationToken) =>
+            Task.FromResult(new EmbeddingResponse(inputs.Select(_ => new float[] { 1, 2, 3 }).ToArray()));
+    }
+
+    private sealed class RejectingPersistenceEmbeddingProvider(DbContextOptions<IngestionDbContext> options) : IEmbeddingProvider
+    {
+        public async Task<EmbeddingResponse> EmbedAsync(EmbeddingProfile profile, IReadOnlyList<string> inputs, CancellationToken cancellationToken)
+        {
+            await using var context = new IngestionDbContext(options);
+            await context.Database.ExecuteSqlRawAsync(
+                "ALTER TABLE chunk_embeddings ADD CONSTRAINT \"CK_test_reject_embeddings\" CHECK (false);",
+                cancellationToken);
+            return new EmbeddingResponse(inputs.Select(_ => Enumerable.Repeat(1f, profile.Dimensions).ToArray()).ToArray());
+        }
     }
 }

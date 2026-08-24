@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Pgvector.EntityFrameworkCore;
 using Rag.Application;
 using Rag.Domain;
 
@@ -16,14 +17,25 @@ public sealed class IngestionDbContext(DbContextOptions<IngestionDbContext> opti
 
     public DbSet<Chunk> Chunks => Set<Chunk>();
 
+    public DbSet<ChunkEmbedding> ChunkEmbeddings => Set<ChunkEmbedding>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
+        modelBuilder.HasPostgresExtension("vector");
+
         modelBuilder.Entity<Collection>(builder =>
         {
             builder.ToTable("collections");
             builder.HasKey(collection => collection.Id);
             builder.Property(collection => collection.Name).HasMaxLength(200).IsRequired();
             builder.Property(collection => collection.CreatedAt).IsRequired();
+            builder.Property(collection => collection.EmbeddingProvider).HasMaxLength(100).IsRequired();
+            builder.Property(collection => collection.EmbeddingModel).HasMaxLength(200).IsRequired();
+            builder.Property(collection => collection.EmbeddingVersion).HasMaxLength(100).IsRequired();
+            builder.Property(collection => collection.EmbeddingDimensions).IsRequired();
+            builder.ToTable(table => table.HasCheckConstraint(
+                "CK_collections_EmbeddingDimensions_positive",
+                "\"EmbeddingDimensions\" > 0"));
         });
 
         modelBuilder.Entity<Document>(builder =>
@@ -112,6 +124,22 @@ public sealed class IngestionDbContext(DbContextOptions<IngestionDbContext> opti
             builder.HasOne<DocumentVersion>()
                 .WithMany()
                 .HasForeignKey(chunk => chunk.DocumentVersionId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<ChunkEmbedding>(builder =>
+        {
+            builder.ToTable("chunk_embeddings");
+            builder.HasKey(embedding => embedding.Id);
+            builder.Property(embedding => embedding.Values).HasColumnType("vector").IsRequired();
+            builder.HasIndex(embedding => embedding.ChunkId).IsUnique();
+            builder.HasOne<Collection>()
+                .WithMany()
+                .HasForeignKey(embedding => embedding.CollectionId)
+                .OnDelete(DeleteBehavior.Restrict);
+            builder.HasOne<Chunk>()
+                .WithMany()
+                .HasForeignKey(embedding => embedding.ChunkId)
                 .OnDelete(DeleteBehavior.Cascade);
         });
     }

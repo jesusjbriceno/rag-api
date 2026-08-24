@@ -9,6 +9,7 @@ public sealed class TxtOperationProcessor(
     IOperationCompletionRepository operations,
     IImmutableContentStore contentStore,
     TxtChunker chunker,
+    IEmbeddingProvider embeddingProvider,
     ILogger<TxtOperationProcessor> logger) : IOperationProcessor
 {
     private static readonly UTF8Encoding StrictUtf8 = new(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
@@ -17,13 +18,14 @@ public sealed class TxtOperationProcessor(
     {
         try
         {
-            var version = await operations.GetDocumentVersionAsync(operation.DocumentVersionId, cancellationToken)
+            var target = await operations.GetIndexingTargetAsync(operation.DocumentVersionId, cancellationToken)
                 ?? throw new ProcessingException("load", "The document version no longer exists.");
-            var content = await ReadContentAsync(version, cancellationToken);
+            var content = await ReadContentAsync(target.Version, cancellationToken);
             var text = DecodeContent(content);
-            var chunks = ChunkContent(version.Id, text);
+            var chunks = ChunkContent(target.Version.Id, text);
+            var embeddings = await EmbedChunksAsync(target.Profile, chunks, cancellationToken);
 
-            return await operations.TryCompleteSuccessAsync(operation, chunks, cancellationToken)
+            return await operations.TryCompleteSuccessAsync(operation, target, chunks, embeddings, cancellationToken)
                 ? OperationProcessingDisposition.Succeeded
                 : OperationProcessingDisposition.LeaseLost;
         }
@@ -38,6 +40,21 @@ public sealed class TxtOperationProcessor(
                 operation,
                 exception.Stage,
                 Truncate(exception.Message),
+                cancellationToken)
+                ? OperationProcessingDisposition.Failed
+                : OperationProcessingDisposition.LeaseLost;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            logger.LogError(exception, "Operation {OperationId} failed during index persistence.", operation.Id);
+            return await operations.TryCompleteFailureAsync(
+                operation,
+                "index",
+                Truncate(exception.GetBaseException().Message),
                 cancellationToken)
                 ? OperationProcessingDisposition.Failed
                 : OperationProcessingDisposition.LeaseLost;
@@ -91,6 +108,32 @@ public sealed class TxtOperationProcessor(
         catch (ArgumentException exception)
         {
             throw new ProcessingException("parse", exception.Message, exception);
+        }
+    }
+
+    private async Task<IReadOnlyList<ChunkEmbeddingInput>> EmbedChunksAsync(
+        EmbeddingProfile profile,
+        IReadOnlyList<Chunk> chunks,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var response = await embeddingProvider.EmbedAsync(profile, chunks.Select(chunk => chunk.Text).ToArray(), cancellationToken);
+            if (response.Vectors.Count != chunks.Count
+                || response.Vectors.Any(vector => vector.Length != profile.Dimensions || vector.Any(value => !float.IsFinite(value))))
+            {
+                throw new EmbeddingProviderException("The embedding provider returned vectors incompatible with the collection profile.");
+            }
+
+            return chunks.Zip(response.Vectors, (chunk, values) => new ChunkEmbeddingInput(chunk.Id, values)).ToArray();
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            throw new ProcessingException("embed", exception.Message, exception);
         }
     }
 

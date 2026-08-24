@@ -6,7 +6,7 @@ public sealed class Collection
     {
     }
 
-    public Collection(Guid id, string name, DateTimeOffset createdAt)
+    public Collection(Guid id, string name, DateTimeOffset createdAt, EmbeddingProfile? embeddingProfile = null)
     {
         if (id == Guid.Empty)
         {
@@ -21,6 +21,11 @@ public sealed class Collection
         Id = id;
         Name = name.Trim();
         CreatedAt = createdAt;
+        var profile = embeddingProfile ?? EmbeddingProfile.Default;
+        EmbeddingProvider = profile.Provider;
+        EmbeddingModel = profile.Model;
+        EmbeddingVersion = profile.Version;
+        EmbeddingDimensions = profile.Dimensions;
     }
 
     public Guid Id { get; private set; }
@@ -28,4 +33,18 @@ public sealed class Collection
     public string Name { get; private set; } = null!;
 
     public DateTimeOffset CreatedAt { get; private set; }
+
+    public string EmbeddingProvider { get; private set; } = null!;
+
+    public string EmbeddingModel { get; private set; } = null!;
+
+    public string EmbeddingVersion { get; private set; } = null!;
+
+    public int EmbeddingDimensions { get; private set; }
+
+    public EmbeddingProfile GetEmbeddingProfile() => new(
+        EmbeddingProvider,
+        EmbeddingModel,
+        EmbeddingVersion,
+        EmbeddingDimensions);
 }

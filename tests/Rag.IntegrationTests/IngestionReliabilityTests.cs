@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Pgvector.EntityFrameworkCore;
 using Rag.Application;
 using Rag.Domain;
 using Rag.Infrastructure;
@@ -112,7 +113,7 @@ public sealed class IngestionReliabilityTests(PostgreSqlFixture fixture)
 
     private DbContextOptions<IngestionDbContext> CreateOptions() =>
         new DbContextOptionsBuilder<IngestionDbContext>()
-            .UseNpgsql(fixture.ConnectionString)
+            .UseNpgsql(fixture.ConnectionString, options => options.UseVector())
             .Options;
 
     private static async Task ResetDatabaseAsync(DbContextOptions<IngestionDbContext> options)

@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Npgsql;
+using Pgvector.EntityFrameworkCore;
 using Rag.Domain;
 using Rag.Infrastructure;
 
@@ -12,7 +13,7 @@ public sealed class IngestionDbContextTests(PostgreSqlFixture fixture)
     public async Task PostgreSql_persists_the_ingestion_metadata_schema()
     {
         var options = new DbContextOptionsBuilder<IngestionDbContext>()
-            .UseNpgsql(fixture.ConnectionString)
+            .UseNpgsql(fixture.ConnectionString, options => options.UseVector())
             .Options;
         await using var context = new IngestionDbContext(options);
 
@@ -42,7 +43,7 @@ public sealed class IngestionDbContextTests(PostgreSqlFixture fixture)
     public async Task PostgreSql_rejects_reparenting_a_document_current_version()
     {
         var options = new DbContextOptionsBuilder<IngestionDbContext>()
-            .UseNpgsql(fixture.ConnectionString)
+            .UseNpgsql(fixture.ConnectionString, options => options.UseVector())
             .Options;
         await using var context = new IngestionDbContext(options);
 
@@ -81,7 +82,7 @@ public sealed class IngestionDbContextTests(PostgreSqlFixture fixture)
     public async Task PostgreSql_rejects_tabs_and_newlines_at_chunk_text_boundaries()
     {
         var options = new DbContextOptionsBuilder<IngestionDbContext>()
-            .UseNpgsql(fixture.ConnectionString)
+            .UseNpgsql(fixture.ConnectionString, options => options.UseVector())
             .Options;
         await using var context = new IngestionDbContext(options);
 
@@ -108,5 +109,140 @@ public sealed class IngestionDbContextTests(PostgreSqlFixture fixture)
             Assert.Equal("23514", exception.SqlState);
             Assert.Equal("CK_chunks_Text_normalized", exception.ConstraintName);
         }
+    }
+
+    [Fact]
+    public async Task PostgreSql_rejects_a_vector_with_dimensions_different_from_its_collection_profile()
+    {
+        var options = new DbContextOptionsBuilder<IngestionDbContext>()
+            .UseNpgsql(fixture.ConnectionString, options => options.UseVector())
+            .Options;
+        await using var context = new IngestionDbContext(options);
+
+        await context.Database.MigrateAsync();
+        await context.Database.ExecuteSqlRawAsync("TRUNCATE TABLE operations, chunks, document_versions, documents, collections CASCADE;");
+        var now = DateTimeOffset.UtcNow;
+        var collection = new Collection(Guid.NewGuid(), "Embedding collection", now);
+        var document = new Document(Guid.NewGuid(), collection.Id, "source://embedding", now);
+        var version = document.AddVersion(
+            Guid.NewGuid(),
+            "embedding.txt",
+            ContentHash.FromBytes("content"u8),
+            ContentReference.ForVersion(Guid.NewGuid()),
+            now);
+        var chunk = new Chunk(Guid.NewGuid(), version.Id, 1, "embedding text");
+        context.Collections.Add(collection);
+        context.Documents.Add(document);
+        context.Chunks.Add(chunk);
+        await context.SaveChangesAsync();
+
+        var exception = await Assert.ThrowsAsync<PostgresException>(() => context.Database.ExecuteSqlInterpolatedAsync(
+            $"INSERT INTO chunk_embeddings (\"Id\", \"CollectionId\", \"ChunkId\", \"Values\") VALUES ({Guid.NewGuid()}, {collection.Id}, {chunk.Id}, '[1,2,3]'::vector);"));
+
+        Assert.Equal("23514", exception.SqlState);
+        Assert.Equal("CK_chunk_embeddings_Dimensions_match_collection", exception.ConstraintName);
+    }
+
+    [Fact]
+    public async Task PostgreSql_rejects_changes_to_a_collection_embedding_profile()
+    {
+        var options = new DbContextOptionsBuilder<IngestionDbContext>()
+            .UseNpgsql(fixture.ConnectionString, options => options.UseVector())
+            .Options;
+        await using var context = new IngestionDbContext(options);
+
+        await context.Database.MigrateAsync();
+        await context.Database.ExecuteSqlRawAsync("TRUNCATE TABLE operations, chunks, document_versions, documents, collections CASCADE;");
+        var collection = new Collection(Guid.NewGuid(), "Immutable embedding collection", DateTimeOffset.UtcNow);
+        context.Collections.Add(collection);
+        await context.SaveChangesAsync();
+
+        var exception = await Assert.ThrowsAsync<PostgresException>(() => context.Database.ExecuteSqlInterpolatedAsync(
+            $"UPDATE collections SET \"EmbeddingDimensions\" = 3 WHERE \"Id\" = {collection.Id};"));
+
+        Assert.Equal("23514", exception.SqlState);
+        Assert.Equal("CK_collections_EmbeddingProfile_immutable", exception.ConstraintName);
+    }
+
+    [Fact]
+    public async Task PostgreSql_rejects_reparenting_an_embedded_document_and_preserves_ownership()
+    {
+        var options = new DbContextOptionsBuilder<IngestionDbContext>()
+            .UseNpgsql(fixture.ConnectionString, options => options.UseVector())
+            .Options;
+        await using var context = new IngestionDbContext(options);
+
+        await context.Database.MigrateAsync();
+        await context.Database.ExecuteSqlRawAsync("TRUNCATE TABLE operations, chunks, document_versions, documents, collections CASCADE;");
+        var now = DateTimeOffset.UtcNow;
+        var sourceCollection = new Collection(Guid.NewGuid(), "Source collection", now);
+        var targetCollection = new Collection(Guid.NewGuid(), "Target collection", now);
+        var document = new Document(Guid.NewGuid(), sourceCollection.Id, "source://embedded", now);
+        var version = document.AddVersion(
+            Guid.NewGuid(),
+            "embedded.txt",
+            ContentHash.FromBytes("content"u8),
+            ContentReference.ForVersion(Guid.NewGuid()),
+            now);
+        var chunk = new Chunk(Guid.NewGuid(), version.Id, 1, "embedded text");
+        var embedding = new ChunkEmbedding(
+            Guid.NewGuid(),
+            sourceCollection.Id,
+            chunk.Id,
+            Enumerable.Repeat(1f, EmbeddingProfile.Default.Dimensions).ToArray());
+        context.Collections.AddRange(sourceCollection, targetCollection);
+        context.Documents.Add(document);
+        context.Chunks.Add(chunk);
+        context.ChunkEmbeddings.Add(embedding);
+        await context.SaveChangesAsync();
+
+        var exception = await Assert.ThrowsAsync<PostgresException>(() => context.Database.ExecuteSqlInterpolatedAsync(
+            $"UPDATE documents SET \"CollectionId\" = {targetCollection.Id} WHERE \"Id\" = {document.Id};"));
+
+        Assert.Equal("23514", exception.SqlState);
+        Assert.Equal("CK_documents_Embedded_chunks_collection_immutable", exception.ConstraintName);
+        context.ChangeTracker.Clear();
+        Assert.Equal(sourceCollection.Id, await context.Documents.AsNoTracking()
+            .Where(item => item.Id == document.Id)
+            .Select(item => item.CollectionId)
+            .SingleAsync());
+        Assert.Equal(sourceCollection.Id, await context.ChunkEmbeddings.AsNoTracking()
+            .Where(item => item.Id == embedding.Id)
+            .Select(item => item.CollectionId)
+            .SingleAsync());
+    }
+
+    [Fact]
+    public async Task PostgreSql_permits_reparenting_a_document_without_embeddings()
+    {
+        var options = new DbContextOptionsBuilder<IngestionDbContext>()
+            .UseNpgsql(fixture.ConnectionString, options => options.UseVector())
+            .Options;
+        await using var context = new IngestionDbContext(options);
+
+        await context.Database.MigrateAsync();
+        await context.Database.ExecuteSqlRawAsync("TRUNCATE TABLE operations, chunks, document_versions, documents, collections CASCADE;");
+        var now = DateTimeOffset.UtcNow;
+        var sourceCollection = new Collection(Guid.NewGuid(), "Source collection", now);
+        var targetCollection = new Collection(Guid.NewGuid(), "Target collection", now);
+        var document = new Document(Guid.NewGuid(), sourceCollection.Id, "source://unembedded", now);
+        document.AddVersion(
+            Guid.NewGuid(),
+            "unembedded.txt",
+            ContentHash.FromBytes("content"u8),
+            ContentReference.ForVersion(Guid.NewGuid()),
+            now);
+        context.Collections.AddRange(sourceCollection, targetCollection);
+        context.Documents.Add(document);
+        await context.SaveChangesAsync();
+
+        await context.Database.ExecuteSqlInterpolatedAsync(
+            $"UPDATE documents SET \"CollectionId\" = {targetCollection.Id} WHERE \"Id\" = {document.Id};");
+
+        context.ChangeTracker.Clear();
+        Assert.Equal(targetCollection.Id, await context.Documents.AsNoTracking()
+            .Where(item => item.Id == document.Id)
+            .Select(item => item.CollectionId)
+            .SingleAsync());
     }
 }

@@ -1,14 +1,22 @@
 using Testcontainers.PostgreSql;
+using Npgsql;
 
 namespace Rag.IntegrationTests;
 
 public sealed class PostgreSqlFixture : IAsyncLifetime
 {
-    private readonly PostgreSqlContainer _container = new PostgreSqlBuilder("postgres:16-alpine").Build();
+    private readonly PostgreSqlContainer _container = new PostgreSqlBuilder("pgvector/pgvector:pg16").Build();
 
     public string ConnectionString => _container.GetConnectionString();
 
-    public Task InitializeAsync() => _container.StartAsync();
+    public async Task InitializeAsync()
+    {
+        await _container.StartAsync();
+        await using var connection = new NpgsqlConnection(ConnectionString);
+        await connection.OpenAsync();
+        await using var command = new NpgsqlCommand("CREATE EXTENSION IF NOT EXISTS vector;", connection);
+        await command.ExecuteNonQueryAsync();
+    }
 
     public Task DisposeAsync() => _container.DisposeAsync().AsTask();
 }

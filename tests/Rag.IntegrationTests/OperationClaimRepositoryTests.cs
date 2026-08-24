@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Npgsql;
+using Pgvector.EntityFrameworkCore;
 using Rag.Application;
 using Rag.Domain;
 using Rag.Infrastructure;
@@ -179,7 +180,7 @@ public sealed class OperationClaimRepositoryTests(PostgreSqlFixture fixture)
 
     private DbContextOptions<IngestionDbContext> CreateOptions() =>
         new DbContextOptionsBuilder<IngestionDbContext>()
-            .UseNpgsql(fixture.ConnectionString)
+            .UseNpgsql(fixture.ConnectionString, options => options.UseVector())
             .Options;
 
     private async Task<DateTimeOffset> GetDatabaseTimeAsync()
