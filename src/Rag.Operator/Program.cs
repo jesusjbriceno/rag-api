@@ -3,20 +3,21 @@ using Microsoft.Extensions.Hosting;
 using Rag.Application;
 using Rag.Infrastructure;
 
+if (args.Length is 0 or > 4)
+{
+    return Usage();
+}
+
 var builder = Host.CreateApplicationBuilder(args);
 builder.Services.AddApplication();
 builder.Services.AddInfrastructure(builder.Configuration);
 using var host = builder.Build();
 
-if (args.Length is 0 or > 3)
-{
-    return Usage();
-}
-
 try
 {
     using var scope = host.Services.CreateScope();
     var credentials = scope.ServiceProvider.GetRequiredService<CredentialOperator>();
+    var collections = scope.ServiceProvider.GetRequiredService<CollectionOwnershipOperator>();
     switch (args[0].ToLowerInvariant())
     {
         case "issue" when args.Length == 2:
@@ -34,6 +35,21 @@ try
         case "revoke" when args.Length == 2:
             await credentials.RevokeAsync(args[1]);
             Console.WriteLine("Credential revoked.");
+            break;
+        case "collections" when args.Length == 2 && string.Equals(args[1], "list-unowned", StringComparison.OrdinalIgnoreCase):
+            {
+                var unowned = await collections.ListUnownedAsync();
+                foreach (var collection in unowned)
+                {
+                    Console.WriteLine($"{collection.Id:D}\t{collection.Name}");
+                }
+
+                break;
+            }
+        case "collections" when args.Length == 4 && string.Equals(args[1], "assign-owner", StringComparison.OrdinalIgnoreCase) &&
+            Guid.TryParse(args[2], out var collectionId) && Guid.TryParse(args[3], out var serviceClientId):
+            await collections.AssignOwnerAsync(collectionId, serviceClientId);
+            Console.WriteLine("Collection owner assigned.");
             break;
         default:
             return Usage();
@@ -57,5 +73,8 @@ static void WriteCredential(IssuedCredential issued)
 static int Usage()
 {
     Console.Error.WriteLine("Usage: Rag.Operator issue <service-client-name> | rotate <key-id> | revoke <key-id>");
+    Console.Error.WriteLine("       Rag.Operator collections list-unowned | collections assign-owner <collection-id> <service-client-id>");
+    Console.Error.WriteLine("Ownership migration: apply the preparatory migration, list unowned collections, assign every collection deliberately, then rerun the enforcement migration.");
+    Console.Error.WriteLine("The assignment command never creates an owner or reassigns an owned collection.");
     return 2;
 }

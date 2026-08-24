@@ -1,14 +1,107 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations.Operations;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Npgsql;
 using Pgvector.EntityFrameworkCore;
+using Rag.Application;
 using Rag.Domain;
 using Rag.Infrastructure;
+using Rag.Infrastructure.Migrations;
 
 namespace Rag.IntegrationTests;
 
 [Collection(PostgreSqlCollection.Name)]
 public sealed class IngestionDbContextTests(PostgreSqlFixture fixture)
 {
+    [Fact]
+    public void Ownership_migrations_prepare_assignment_before_enforcing_ownership()
+    {
+        var preparation = new AddCollectionOwnership();
+        var builder = new MigrationBuilder("Npgsql.EntityFrameworkCore.PostgreSQL");
+        typeof(AddCollectionOwnership).GetMethod("Up", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            .Invoke(preparation, [builder]);
+
+        var ownerColumn = Assert.IsType<AddColumnOperation>(builder.Operations.Single(operation => operation is AddColumnOperation addColumn && addColumn.Name == "ServiceClientId"));
+        Assert.True(ownerColumn.IsNullable);
+        Assert.Contains(builder.Operations, operation => operation is AddForeignKeyOperation foreignKey && foreignKey.Name == "FK_collections_service_clients_ServiceClientId");
+
+        var enforcement = new EnforceCollectionOwnership();
+        var enforcementBuilder = new MigrationBuilder("Npgsql.EntityFrameworkCore.PostgreSQL");
+        typeof(EnforceCollectionOwnership).GetMethod("Up", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            .Invoke(enforcement, [enforcementBuilder]);
+
+        var safetyCheck = Assert.IsType<SqlOperation>(enforcementBuilder.Operations.Single(operation => operation is SqlOperation sql && sql.Sql.Contains("Collection ownership enforcement is blocked", StringComparison.Ordinal)));
+        Assert.Contains("\"ServiceClientId\" IS NULL", safetyCheck.Sql, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task PostgreSql_requires_explicit_legacy_collection_assignment_before_ownership_enforcement()
+    {
+        var options = new DbContextOptionsBuilder<IngestionDbContext>()
+            .UseNpgsql(fixture.ConnectionString, options => options.UseVector())
+            .Options;
+        await using var context = new IngestionDbContext(options);
+        var migrator = context.GetService<IMigrator>();
+
+        await migrator.MigrateAsync("20260824140000_AddServiceClientCredentials");
+        await context.Database.ExecuteSqlRawAsync("TRUNCATE TABLE client_credentials, service_clients, operations, chunk_embeddings, chunks, document_versions, documents, collections CASCADE;");
+
+        var legacyCollectionId = Guid.NewGuid();
+        var createdAt = DateTimeOffset.UtcNow;
+        await context.Database.ExecuteSqlInterpolatedAsync(
+            $"""
+            INSERT INTO collections ("Id", "Name", "CreatedAt", "EmbeddingProvider", "EmbeddingModel", "EmbeddingVersion", "EmbeddingDimensions")
+            VALUES ({legacyCollectionId}, {"Legacy collection"}, {createdAt}, {"ollama"}, {"qwen3-embedding:0.6b"}, {"0.6b"}, {1_024});
+            """);
+
+        await migrator.MigrateAsync("20260824150000_AddCollectionOwnership");
+
+        var ownerId = Guid.NewGuid();
+        context.ServiceClients.Add(new ServiceClient(ownerId, "legacy-owner", createdAt));
+        await context.SaveChangesAsync();
+        using var dataSource = new NpgsqlDataSourceBuilder(fixture.ConnectionString).Build();
+        var ownership = new CollectionOwnershipOperator(new CollectionOwnershipRepository(dataSource));
+
+        var unowned = await ownership.ListUnownedAsync();
+        var legacy = Assert.Single(unowned);
+        Assert.Equal(legacyCollectionId, legacy.Id);
+
+        var exception = await Assert.ThrowsAsync<PostgresException>(() => migrator.MigrateAsync("20260824150100_EnforceCollectionOwnership"));
+        Assert.Contains("Rag.Operator collections list-unowned", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("assign-owner", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("20260824150000_AddCollectionOwnership", await context.Database.GetAppliedMigrationsAsync());
+        Assert.DoesNotContain("20260824150100_EnforceCollectionOwnership", await context.Database.GetAppliedMigrationsAsync());
+
+        await ownership.AssignOwnerAsync(legacyCollectionId, ownerId);
+        Assert.Empty(await ownership.ListUnownedAsync());
+
+        await migrator.MigrateAsync("20260824150100_EnforceCollectionOwnership");
+        context.ChangeTracker.Clear();
+        Assert.Equal(ownerId, await context.Collections.AsNoTracking()
+            .Where(collection => collection.Id == legacyCollectionId)
+            .Select(collection => collection.ServiceClientId)
+            .SingleAsync());
+    }
+
+    [Fact]
+    public async Task PostgreSql_applies_collection_ownership_migrations_without_legacy_rows()
+    {
+        var options = new DbContextOptionsBuilder<IngestionDbContext>()
+            .UseNpgsql(fixture.ConnectionString, options => options.UseVector())
+            .Options;
+        await using var context = new IngestionDbContext(options);
+        var migrator = context.GetService<IMigrator>();
+
+        await migrator.MigrateAsync("20260824140000_AddServiceClientCredentials");
+        await context.Database.ExecuteSqlRawAsync("TRUNCATE TABLE client_credentials, service_clients, operations, chunk_embeddings, chunks, document_versions, documents, collections CASCADE;");
+
+        await context.Database.MigrateAsync();
+
+        Assert.Contains("20260824150000_AddCollectionOwnership", await context.Database.GetAppliedMigrationsAsync());
+        Assert.Contains("20260824150100_EnforceCollectionOwnership", await context.Database.GetAppliedMigrationsAsync());
+    }
+
     [Fact]
     public async Task PostgreSql_persists_the_ingestion_metadata_schema()
     {
@@ -20,7 +113,7 @@ public sealed class IngestionDbContextTests(PostgreSqlFixture fixture)
         await context.Database.MigrateAsync();
         await context.Database.ExecuteSqlRawAsync("TRUNCATE TABLE client_credentials, service_clients, operations, document_versions, documents, collections CASCADE;");
         var now = DateTimeOffset.UtcNow;
-        var collection = new Collection(Guid.NewGuid(), "Integration collection", now);
+        var collection = IntegrationData.NewCollection(context, "Integration collection", now);
         var document = new Document(Guid.NewGuid(), collection.Id, "source://integration", now);
         var version = document.AddVersion(
             Guid.NewGuid(),
@@ -50,7 +143,7 @@ public sealed class IngestionDbContextTests(PostgreSqlFixture fixture)
         await context.Database.MigrateAsync();
         await context.Database.ExecuteSqlRawAsync("TRUNCATE TABLE client_credentials, service_clients, operations, document_versions, documents, collections CASCADE;");
         var now = DateTimeOffset.UtcNow;
-        var collection = new Collection(Guid.NewGuid(), "Integration collection", now);
+        var collection = IntegrationData.NewCollection(context, "Integration collection", now);
         var sourceDocument = new Document(Guid.NewGuid(), collection.Id, "source://first", now);
         var sourceVersion = sourceDocument.AddVersion(
             Guid.NewGuid(),
@@ -89,7 +182,7 @@ public sealed class IngestionDbContextTests(PostgreSqlFixture fixture)
         await context.Database.MigrateAsync();
         await context.Database.ExecuteSqlRawAsync("TRUNCATE TABLE client_credentials, service_clients, operations, chunks, document_versions, documents, collections CASCADE;");
         var now = DateTimeOffset.UtcNow;
-        var collection = new Collection(Guid.NewGuid(), "Integration collection", now);
+        var collection = IntegrationData.NewCollection(context, "Integration collection", now);
         var document = new Document(Guid.NewGuid(), collection.Id, "source://chunk-whitespace", now);
         var version = document.AddVersion(
             Guid.NewGuid(),
@@ -122,7 +215,7 @@ public sealed class IngestionDbContextTests(PostgreSqlFixture fixture)
         await context.Database.MigrateAsync();
         await context.Database.ExecuteSqlRawAsync("TRUNCATE TABLE client_credentials, service_clients, operations, chunks, document_versions, documents, collections CASCADE;");
         var now = DateTimeOffset.UtcNow;
-        var collection = new Collection(Guid.NewGuid(), "Embedding collection", now);
+        var collection = IntegrationData.NewCollection(context, "Embedding collection", now);
         var document = new Document(Guid.NewGuid(), collection.Id, "source://embedding", now);
         var version = document.AddVersion(
             Guid.NewGuid(),
@@ -153,7 +246,7 @@ public sealed class IngestionDbContextTests(PostgreSqlFixture fixture)
 
         await context.Database.MigrateAsync();
         await context.Database.ExecuteSqlRawAsync("TRUNCATE TABLE client_credentials, service_clients, operations, chunks, document_versions, documents, collections CASCADE;");
-        var collection = new Collection(Guid.NewGuid(), "Immutable embedding collection", DateTimeOffset.UtcNow);
+        var collection = IntegrationData.NewCollection(context, "Immutable embedding collection", DateTimeOffset.UtcNow);
         context.Collections.Add(collection);
         await context.SaveChangesAsync();
 
@@ -175,8 +268,8 @@ public sealed class IngestionDbContextTests(PostgreSqlFixture fixture)
         await context.Database.MigrateAsync();
         await context.Database.ExecuteSqlRawAsync("TRUNCATE TABLE client_credentials, service_clients, operations, chunks, document_versions, documents, collections CASCADE;");
         var now = DateTimeOffset.UtcNow;
-        var sourceCollection = new Collection(Guid.NewGuid(), "Source collection", now);
-        var targetCollection = new Collection(Guid.NewGuid(), "Target collection", now);
+        var sourceCollection = IntegrationData.NewCollection(context, "Source collection", now);
+        var targetCollection = IntegrationData.NewCollection(context, "Target collection", now);
         var document = new Document(Guid.NewGuid(), sourceCollection.Id, "source://embedded", now);
         var version = document.AddVersion(
             Guid.NewGuid(),
@@ -223,8 +316,8 @@ public sealed class IngestionDbContextTests(PostgreSqlFixture fixture)
         await context.Database.MigrateAsync();
         await context.Database.ExecuteSqlRawAsync("TRUNCATE TABLE client_credentials, service_clients, operations, chunks, document_versions, documents, collections CASCADE;");
         var now = DateTimeOffset.UtcNow;
-        var sourceCollection = new Collection(Guid.NewGuid(), "Source collection", now);
-        var targetCollection = new Collection(Guid.NewGuid(), "Target collection", now);
+        var sourceCollection = IntegrationData.NewCollection(context, "Source collection", now);
+        var targetCollection = IntegrationData.NewCollection(context, "Target collection", now);
         var document = new Document(Guid.NewGuid(), sourceCollection.Id, "source://unembedded", now);
         document.AddVersion(
             Guid.NewGuid(),

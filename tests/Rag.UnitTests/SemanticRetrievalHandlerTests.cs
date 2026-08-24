@@ -13,15 +13,30 @@ public sealed class SemanticRetrievalHandlerTests
         var repository = new RecordingRepository();
         var handler = new SemanticRetrievalHandler(profiles, provider, repository);
 
-        await Assert.ThrowsAsync<ArgumentException>(() => handler.HandleAsync(new SemanticRetrievalQuery([], "query", 1)));
-        await Assert.ThrowsAsync<ArgumentException>(() => handler.HandleAsync(new SemanticRetrievalQuery([Guid.NewGuid(), Guid.NewGuid()], " ", 1)));
+        var serviceClientId = Guid.NewGuid();
+        await Assert.ThrowsAsync<ArgumentException>(() => handler.HandleAsync(new SemanticRetrievalQuery(serviceClientId, [], "query", 1)));
+        await Assert.ThrowsAsync<ArgumentException>(() => handler.HandleAsync(new SemanticRetrievalQuery(serviceClientId, [Guid.NewGuid(), Guid.NewGuid()], " ", 1)));
         var collectionId = Guid.NewGuid();
-        await Assert.ThrowsAsync<ArgumentException>(() => handler.HandleAsync(new SemanticRetrievalQuery([collectionId, collectionId], "query", 1)));
-        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => handler.HandleAsync(new SemanticRetrievalQuery([Guid.NewGuid()], "query", 0)));
+        await Assert.ThrowsAsync<ArgumentException>(() => handler.HandleAsync(new SemanticRetrievalQuery(serviceClientId, [collectionId, collectionId], "query", 1)));
+        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => handler.HandleAsync(new SemanticRetrievalQuery(serviceClientId, [Guid.NewGuid()], "query", 0)));
 
         Assert.Empty(profiles.RequestedCollectionIds);
         Assert.Equal(0, provider.CallCount);
         Assert.Equal(0, repository.CallCount);
+    }
+
+    [Fact]
+    public async Task Enforces_api_retrieval_bounds_before_loading_profiles()
+    {
+        var profiles = new RecordingProfiles();
+        var handler = new SemanticRetrievalHandler(profiles, new RecordingEmbeddingProvider(), new RecordingRepository());
+        var owner = Guid.NewGuid();
+
+        await Assert.ThrowsAsync<ArgumentException>(() => handler.HandleAsync(new SemanticRetrievalQuery(owner, Enumerable.Repeat(Guid.NewGuid(), 11).ToArray(), "query", 1)));
+        await Assert.ThrowsAsync<ArgumentException>(() => handler.HandleAsync(new SemanticRetrievalQuery(owner, [Guid.NewGuid()], new string('q', 8_001), 1)));
+        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => handler.HandleAsync(new SemanticRetrievalQuery(owner, [Guid.NewGuid()], "query", 51)));
+
+        Assert.Empty(profiles.RequestedCollectionIds);
     }
 
     [Fact]
@@ -40,8 +55,8 @@ public sealed class SemanticRetrievalHandlerTests
         var repository = new RecordingRepository();
         var handler = new SemanticRetrievalHandler(profiles, provider, repository);
 
-        await Assert.ThrowsAsync<InvalidOperationException>(() => handler.HandleAsync(
-            new SemanticRetrievalQuery([firstCollectionId, missingCollectionId], "query", 1)));
+        await Assert.ThrowsAsync<ResourceNotFoundException>(() => handler.HandleAsync(
+            new SemanticRetrievalQuery(Guid.NewGuid(), [firstCollectionId, missingCollectionId], "query", 1)));
 
         Assert.Equal(new[] { firstCollectionId, missingCollectionId }, profiles.RequestedCollectionIds);
         Assert.Equal(0, provider.CallCount);
@@ -65,8 +80,8 @@ public sealed class SemanticRetrievalHandlerTests
         var repository = new RecordingRepository();
         var handler = new SemanticRetrievalHandler(profiles, provider, repository);
 
-        await Assert.ThrowsAsync<InvalidOperationException>(() => handler.HandleAsync(
-            new SemanticRetrievalQuery([firstCollectionId, secondCollectionId], "query", 1)));
+        await Assert.ThrowsAsync<IncompatibleEmbeddingProfilesException>(() => handler.HandleAsync(
+            new SemanticRetrievalQuery(Guid.NewGuid(), [firstCollectionId, secondCollectionId], "query", 1)));
 
         Assert.Equal(new[] { firstCollectionId, secondCollectionId }, profiles.RequestedCollectionIds);
         Assert.Equal(0, provider.CallCount);
@@ -92,7 +107,7 @@ public sealed class SemanticRetrievalHandlerTests
         var repository = new RecordingRepository { Results = [expected] };
         var handler = new SemanticRetrievalHandler(profiles, provider, repository);
 
-        var result = await handler.HandleAsync(new SemanticRetrievalQuery([firstCollectionId, secondCollectionId], "query", 2));
+        var result = await handler.HandleAsync(new SemanticRetrievalQuery(Guid.NewGuid(), [firstCollectionId, secondCollectionId], "query", 2));
 
         Assert.Equal([expected], result);
         Assert.Equal(1, provider.CallCount);
@@ -114,7 +129,7 @@ public sealed class SemanticRetrievalHandlerTests
         var repository = new RecordingRepository();
         var handler = new SemanticRetrievalHandler(profiles, provider, repository);
 
-        var handling = handler.HandleAsync(new SemanticRetrievalQuery([firstCollectionId, secondCollectionId], "query", 1));
+        var handling = handler.HandleAsync(new SemanticRetrievalQuery(Guid.NewGuid(), [firstCollectionId, secondCollectionId], "query", 1));
         await profiles.FirstLookupStarted.Task.WaitAsync(TimeSpan.FromSeconds(1));
 
         Assert.Equal([firstCollectionId], profiles.RequestedCollectionIds);
@@ -135,7 +150,7 @@ public sealed class SemanticRetrievalHandlerTests
 
         public List<Guid> RequestedCollectionIds { get; } = [];
 
-        public Task<EmbeddingProfile?> GetProfileAsync(Guid collectionId, CancellationToken cancellationToken)
+        public Task<EmbeddingProfile?> GetProfileAsync(Guid serviceClientId, Guid collectionId, CancellationToken cancellationToken)
         {
             RequestedCollectionIds.Add(collectionId);
             return Task.FromResult(Profiles.GetValueOrDefault(collectionId));
@@ -160,7 +175,7 @@ public sealed class SemanticRetrievalHandlerTests
 
         public void ReleaseFirstLookup() => releaseFirstLookup.SetResult();
 
-        public async Task<EmbeddingProfile?> GetProfileAsync(Guid collectionId, CancellationToken cancellationToken)
+        public async Task<EmbeddingProfile?> GetProfileAsync(Guid serviceClientId, Guid collectionId, CancellationToken cancellationToken)
         {
             RequestedCollectionIds.Add(collectionId);
             var activeCalls = Interlocked.Increment(ref this.activeCalls);

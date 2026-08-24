@@ -27,8 +27,8 @@ public sealed class PostgresSemanticRetrievalRepositoryTests(PostgreSqlFixture f
         await using (var context = new IngestionDbContext(options))
         {
             var now = DateTimeOffset.UtcNow;
-            var requestedCollection = new Collection(requestedCollectionId, "Requested collection", now, profile);
-            var otherCollection = new Collection(otherCollectionId, "Other collection", now, profile);
+            var requestedCollection = IntegrationData.NewCollection(context, requestedCollectionId, "Requested collection", now, profile);
+            var otherCollection = IntegrationData.NewCollection(context, otherCollectionId, "Other collection", now, profile);
             var document = new Document(documentId, requestedCollection.Id, "source://requested", now);
             var historicalVersion = document.AddVersion(
                 historicalVersionId,
@@ -97,7 +97,8 @@ public sealed class PostgresSemanticRetrievalRepositoryTests(PostgreSqlFixture f
 
         await using (var context = new IngestionDbContext(options))
         {
-            context.Collections.Add(new Collection(
+            context.Collections.Add(IntegrationData.NewCollection(
+                context,
                 collectionId,
                 "Empty collection",
                 DateTimeOffset.UtcNow,

@@ -6,10 +6,10 @@ namespace Rag.Infrastructure;
 
 public sealed class CollectionEmbeddingProfileRepository(IngestionDbContext dbContext) : ICollectionEmbeddingProfileRepository
 {
-    public async Task<EmbeddingProfile?> GetProfileAsync(Guid collectionId, CancellationToken cancellationToken)
+    public async Task<EmbeddingProfile?> GetProfileAsync(Guid serviceClientId, Guid collectionId, CancellationToken cancellationToken)
     {
         var collection = await dbContext.Collections.AsNoTracking()
-            .Where(item => item.Id == collectionId)
+            .Where(item => item.Id == collectionId && item.ServiceClientId == serviceClientId)
             .Select(item => new
             {
                 item.EmbeddingProvider,

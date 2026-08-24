@@ -21,22 +21,23 @@ public sealed class IngestionReliabilityTests(PostgreSqlFixture fixture)
         {
             await using var firstContext = new IngestionDbContext(options);
             await using var secondContext = new IngestionDbContext(options);
-            using var contentStore = new CoordinatedContentStore(new FileSystemImmutableContentStore(rootPath));
+            var contentStore = new FileSystemImmutableContentStore(rootPath);
             var firstHandler = new AcceptTxtIngestionHandler(
-                new IngestionRepository(firstContext, new TestDbContextFactory(options)),
+                new IngestionRepository(firstContext),
                 contentStore);
             var secondHandler = new AcceptTxtIngestionHandler(
-                new IngestionRepository(secondContext, new TestDbContextFactory(options)),
+                new IngestionRepository(secondContext),
                 contentStore);
             var command = new AcceptTxtIngestionCommand(
+                collection.ServiceClientId,
                 collection.Id,
                 "guide.txt",
                 "identical content"u8.ToArray(),
                 "source://guide");
 
-            var results = await Task.WhenAll(
-                Task.Run(() => firstHandler.HandleAsync(command)),
-                Task.Run(() => secondHandler.HandleAsync(command)));
+            var results = await SubmitConcurrentlyAsync(
+                () => firstHandler.HandleAsync(command),
+                () => secondHandler.HandleAsync(command));
 
             Assert.Single(results, result => !result.IsDuplicate);
             Assert.Single(results, result => result.IsDuplicate);
@@ -44,14 +45,71 @@ public sealed class IngestionReliabilityTests(PostgreSqlFixture fixture)
             Assert.Equal(results[0].DocumentVersionId, results[1].DocumentVersionId);
             Assert.Single(Directory.EnumerateFiles(Path.Combine(rootPath, "versions")));
 
-            var failedContext = results[0].IsDuplicate ? firstContext : secondContext;
-            Assert.Empty(failedContext.ChangeTracker.Entries());
-            await failedContext.SaveChangesAsync();
-
             await using var verificationContext = new IngestionDbContext(options);
             Assert.Equal(1, await verificationContext.Documents.CountAsync());
             Assert.Equal(1, await verificationContext.DocumentVersions.CountAsync());
             Assert.Equal(1, await verificationContext.Operations.CountAsync());
+        }
+        finally
+        {
+            if (Directory.Exists(rootPath))
+            {
+                Directory.Delete(rootPath, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task Concurrent_same_reference_and_different_content_creates_two_versions_and_operations_without_a_unique_failure()
+    {
+        var options = CreateOptions();
+        await ResetDatabaseAsync(options);
+        var collection = await AddCollectionAsync(options);
+        var rootPath = Path.Combine(Path.GetTempPath(), $"rag-content-store-{Guid.NewGuid():N}");
+
+        try
+        {
+            await using var firstContext = new IngestionDbContext(options);
+            await using var secondContext = new IngestionDbContext(options);
+            var contentStore = new FileSystemImmutableContentStore(rootPath);
+            var firstHandler = new AcceptTxtIngestionHandler(
+                new IngestionRepository(firstContext),
+                contentStore);
+            var secondHandler = new AcceptTxtIngestionHandler(
+                new IngestionRepository(secondContext),
+                contentStore);
+
+            var results = await SubmitConcurrentlyAsync(
+                () => firstHandler.HandleAsync(new AcceptTxtIngestionCommand(
+                    collection.ServiceClientId,
+                    collection.Id,
+                    "guide.txt",
+                    "first content"u8.ToArray(),
+                    "source://guide")),
+                () => secondHandler.HandleAsync(new AcceptTxtIngestionCommand(
+                    collection.ServiceClientId,
+                    collection.Id,
+                    "guide.txt",
+                    "second content"u8.ToArray(),
+                    "source://guide")));
+
+            Assert.All(results, result => Assert.False(result.IsDuplicate));
+            Assert.Equal(results[0].DocumentId, results[1].DocumentId);
+            Assert.NotEqual(results[0].DocumentVersionId, results[1].DocumentVersionId);
+            Assert.All(results, result => Assert.NotNull(result.OperationId));
+            Assert.Equal(2, Directory.EnumerateFiles(Path.Combine(rootPath, "versions")).Count());
+
+            await using var verificationContext = new IngestionDbContext(options);
+            var document = await verificationContext.Documents
+                .Include(item => item.Versions)
+                .SingleAsync();
+            var operations = await verificationContext.Operations.ToListAsync();
+            Assert.Equal([1, 2], document.Versions.Select(version => version.Number).Order().ToArray());
+            Assert.Equal(2, operations.Count);
+            Assert.All(operations, operation => Assert.Equal(OperationStatus.Pending, operation.Status));
+            Assert.Equal(
+                document.Versions.Select(version => version.Id).Order().ToArray(),
+                operations.Select(operation => operation.DocumentVersionId).Order().ToArray());
         }
         finally
         {
@@ -126,7 +184,7 @@ public sealed class IngestionReliabilityTests(PostgreSqlFixture fixture)
     private static async Task<Collection> AddCollectionAsync(DbContextOptions<IngestionDbContext> options)
     {
         await using var context = new IngestionDbContext(options);
-        var collection = new Collection(Guid.NewGuid(), "Integration collection", DateTimeOffset.UtcNow);
+        var collection = IntegrationData.NewCollection(context, "Integration collection", DateTimeOffset.UtcNow);
         context.Collections.Add(collection);
         await context.SaveChangesAsync();
         return collection;
@@ -137,7 +195,7 @@ public sealed class IngestionReliabilityTests(PostgreSqlFixture fixture)
         string externalReference)
     {
         await using var context = new IngestionDbContext(options);
-        var collection = new Collection(Guid.NewGuid(), "Invariant collection", DateTimeOffset.UtcNow);
+        var collection = IntegrationData.NewCollection(context, "Invariant collection", DateTimeOffset.UtcNow);
         var document = new Document(Guid.NewGuid(), collection.Id, externalReference, DateTimeOffset.UtcNow);
         var version = document.AddVersion(
             Guid.NewGuid(),
@@ -151,34 +209,20 @@ public sealed class IngestionReliabilityTests(PostgreSqlFixture fixture)
         return (document, document.Id, version.Id);
     }
 
-    private sealed class TestDbContextFactory(DbContextOptions<IngestionDbContext> options) : IDbContextFactory<IngestionDbContext>
+    private static async Task<T[]> SubmitConcurrentlyAsync<T>(Func<Task<T>> first, Func<Task<T>> second)
     {
-        public IngestionDbContext CreateDbContext() => new(options);
-
-        public Task<IngestionDbContext> CreateDbContextAsync(CancellationToken cancellationToken = default) =>
-            Task.FromResult(new IngestionDbContext(options));
-    }
-
-    private sealed class CoordinatedContentStore(IImmutableContentStore inner) : IImmutableContentStore, IDisposable
-    {
-        private readonly Barrier _barrier = new(participantCount: 2);
-
-        public async Task StoreAsync(
-            ContentReference reference,
-            ContentHash contentHash,
-            ReadOnlyMemory<byte> content,
-            CancellationToken cancellationToken)
+        using var start = new Barrier(participantCount: 2);
+        var firstSubmission = Task.Run(async () =>
         {
-            await inner.StoreAsync(reference, contentHash, content, cancellationToken);
-            _barrier.SignalAndWait(cancellationToken);
-        }
-
-        public Task<byte[]> ReadAsync(ContentReference reference, ContentHash contentHash, CancellationToken cancellationToken) =>
-            inner.ReadAsync(reference, contentHash, cancellationToken);
-
-        public Task DeleteAsync(ContentReference reference, CancellationToken cancellationToken) =>
-            inner.DeleteAsync(reference, cancellationToken);
-
-        public void Dispose() => _barrier.Dispose();
+            start.SignalAndWait();
+            return await first();
+        });
+        var secondSubmission = Task.Run(async () =>
+        {
+            start.SignalAndWait();
+            return await second();
+        });
+        return await Task.WhenAll(firstSubmission, secondSubmission);
     }
+
 }

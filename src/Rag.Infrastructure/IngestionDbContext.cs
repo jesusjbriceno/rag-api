@@ -32,6 +32,7 @@ public sealed class IngestionDbContext(DbContextOptions<IngestionDbContext> opti
             builder.ToTable("collections");
             builder.HasKey(collection => collection.Id);
             builder.Property(collection => collection.Name).HasMaxLength(200).IsRequired();
+            builder.Property(collection => collection.ServiceClientId).IsRequired();
             builder.Property(collection => collection.CreatedAt).IsRequired();
             builder.Property(collection => collection.EmbeddingProvider).HasMaxLength(100).IsRequired();
             builder.Property(collection => collection.EmbeddingModel).HasMaxLength(200).IsRequired();
@@ -40,6 +41,10 @@ public sealed class IngestionDbContext(DbContextOptions<IngestionDbContext> opti
             builder.ToTable(table => table.HasCheckConstraint(
                 "CK_collections_EmbeddingDimensions_positive",
                 "\"EmbeddingDimensions\" > 0"));
+            builder.HasOne<ServiceClient>()
+                .WithMany()
+                .HasForeignKey(collection => collection.ServiceClientId)
+                .OnDelete(DeleteBehavior.Restrict);
         });
 
         modelBuilder.Entity<Document>(builder =>

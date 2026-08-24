@@ -122,7 +122,7 @@ public sealed class QueryEmbeddingServiceTests
         var provider = new RecordingEmbeddingProvider();
         var service = new QueryEmbeddingService(new StaticCollectionProfiles(profile), provider);
 
-        var result = await service.EmbedAsync(Guid.NewGuid(), "query");
+        var result = await service.EmbedAsync(Guid.NewGuid(), Guid.NewGuid(), "query");
 
         Assert.Equal(profile, provider.Profile);
         Assert.Equal(new[] { 1f, 2f, 3f }, result);
@@ -130,7 +130,7 @@ public sealed class QueryEmbeddingServiceTests
 
     private sealed class StaticCollectionProfiles(EmbeddingProfile profile) : ICollectionEmbeddingProfileRepository
     {
-        public Task<EmbeddingProfile?> GetProfileAsync(Guid collectionId, CancellationToken cancellationToken) => Task.FromResult<EmbeddingProfile?>(profile);
+        public Task<EmbeddingProfile?> GetProfileAsync(Guid serviceClientId, Guid collectionId, CancellationToken cancellationToken) => Task.FromResult<EmbeddingProfile?>(profile);
     }
 
     private sealed class RecordingEmbeddingProvider : IEmbeddingProvider

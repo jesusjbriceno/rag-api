@@ -54,6 +54,10 @@ public static class InfrastructureServiceCollectionExtensions
             .ValidateOnStart();
         services.AddSingleton(serviceProvider => new JwtKeyMaterial(serviceProvider.GetRequiredService<IOptions<JwtOptions>>().Value));
         services.AddScoped<IIngestionRepository, IngestionRepository>();
+        services.AddScoped<ICollectionCommandRepository, OwnedCollectionRepository>();
+        services.AddScoped<IOperationStatusRepository, OwnedCollectionRepository>();
+        services.AddScoped<ICollectionOwnershipRepository, CollectionOwnershipRepository>();
+        services.AddSingleton<IEmbeddingProfileDefaults, ConfiguredEmbeddingProfileDefaults>();
         services.AddSingleton<IImmutableContentStore>(_ => new FileSystemImmutableContentStore(contentRoot));
         services.AddSingleton<IOperationClaimRepository, OperationClaimRepository>();
         services.AddSingleton<IOperationCompletionRepository, OperationCompletionRepository>();

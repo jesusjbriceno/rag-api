@@ -262,7 +262,7 @@ public sealed class TxtOperationProcessorTests(PostgreSqlFixture fixture)
 
         await using (var context = new IngestionDbContext(options))
         {
-            var collection = new Collection(Guid.NewGuid(), "TXT processing collection", now);
+            var collection = IntegrationData.NewCollection(context, "TXT processing collection", now);
             var document = new Document(Guid.NewGuid(), collection.Id, $"source://{versionId:N}", now);
             var documentVersion = document.AddVersion(versionId, "content.txt", hash, reference, now);
             var operation = Operation.CreatePending(documentVersion.Id, now);

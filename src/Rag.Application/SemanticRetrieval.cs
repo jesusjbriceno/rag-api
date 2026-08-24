@@ -3,6 +3,7 @@ using Rag.Domain;
 namespace Rag.Application;
 
 public sealed record SemanticRetrievalQuery(
+    Guid ServiceClientId,
     IReadOnlyList<Guid> CollectionIds,
     string Query,
     int TopK);
@@ -36,7 +37,7 @@ public sealed class SemanticRetrievalHandler(
     {
         ArgumentNullException.ThrowIfNull(query);
         ArgumentNullException.ThrowIfNull(query.CollectionIds);
-        if (query.CollectionIds.Count == 0 || query.CollectionIds.Any(collectionId => collectionId == Guid.Empty))
+        if (query.ServiceClientId == Guid.Empty || query.CollectionIds.Count is 0 or > 10 || query.CollectionIds.Any(collectionId => collectionId == Guid.Empty))
         {
             throw new ArgumentException("At least one collection id is required.", nameof(query));
         }
@@ -46,12 +47,12 @@ public sealed class SemanticRetrievalHandler(
             throw new ArgumentException("Collection ids must be distinct.", nameof(query));
         }
 
-        if (string.IsNullOrWhiteSpace(query.Query))
+        if (string.IsNullOrWhiteSpace(query.Query) || query.Query.Length > 8_000)
         {
             throw new ArgumentException("A query is required.", nameof(query));
         }
 
-        if (query.TopK <= 0)
+        if (query.TopK is < 1 or > 50)
         {
             throw new ArgumentOutOfRangeException(nameof(query), "Top-k must be positive.");
         }
@@ -59,17 +60,17 @@ public sealed class SemanticRetrievalHandler(
         var profiles = new List<(Guid CollectionId, EmbeddingProfile? Profile)>(query.CollectionIds.Count);
         foreach (var collectionId in query.CollectionIds)
         {
-            profiles.Add((collectionId, await collectionProfiles.GetProfileAsync(collectionId, cancellationToken)));
+            profiles.Add((collectionId, await collectionProfiles.GetProfileAsync(query.ServiceClientId, collectionId, cancellationToken)));
         }
         if (profiles.Any(item => item.Profile is null))
         {
-            throw new InvalidOperationException("One or more collections do not exist.");
+            throw new ResourceNotFoundException();
         }
 
         var sharedProfile = profiles[0].Profile!;
         if (profiles.Any(item => item.Profile != sharedProfile))
         {
-            throw new InvalidOperationException("Requested collections have incompatible embedding profiles.");
+            throw new IncompatibleEmbeddingProfilesException();
         }
 
         var response = await embeddingProvider.EmbedAsync(sharedProfile, [query.Query], cancellationToken);

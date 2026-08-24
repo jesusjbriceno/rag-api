@@ -221,7 +221,7 @@ public sealed class OperationClaimRepositoryTests(PostgreSqlFixture fixture)
         int count)
     {
         await using var context = new IngestionDbContext(options);
-        var collection = new Collection(Guid.NewGuid(), "Operation collection", createdAt);
+        var collection = IntegrationData.NewCollection(context, "Operation collection", createdAt);
         context.Collections.Add(collection);
         var operationIds = new List<Guid>(count);
         for (var index = 0; index < count; index++)

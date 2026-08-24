@@ -70,16 +70,16 @@ public interface IEmbeddingProvider
 
 public interface ICollectionEmbeddingProfileRepository
 {
-    Task<EmbeddingProfile?> GetProfileAsync(Guid collectionId, CancellationToken cancellationToken);
+    Task<EmbeddingProfile?> GetProfileAsync(Guid serviceClientId, Guid collectionId, CancellationToken cancellationToken);
 }
 
 public sealed class QueryEmbeddingService(
     ICollectionEmbeddingProfileRepository collections,
     IEmbeddingProvider embeddingProvider)
 {
-    public async Task<float[]> EmbedAsync(Guid collectionId, string query, CancellationToken cancellationToken = default)
+    public async Task<float[]> EmbedAsync(Guid serviceClientId, Guid collectionId, string query, CancellationToken cancellationToken = default)
     {
-        if (collectionId == Guid.Empty)
+        if (serviceClientId == Guid.Empty || collectionId == Guid.Empty)
         {
             throw new ArgumentException("A collection id is required.", nameof(collectionId));
         }
@@ -89,8 +89,8 @@ public sealed class QueryEmbeddingService(
             throw new ArgumentException("A query is required.", nameof(query));
         }
 
-        var profile = await collections.GetProfileAsync(collectionId, cancellationToken)
-            ?? throw new InvalidOperationException("The collection does not exist.");
+        var profile = await collections.GetProfileAsync(serviceClientId, collectionId, cancellationToken)
+            ?? throw new ResourceNotFoundException();
         var response = await embeddingProvider.EmbedAsync(profile, [query], cancellationToken);
         if (response.Vectors.Count != 1)
         {

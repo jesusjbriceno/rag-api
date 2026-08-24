@@ -12,7 +12,7 @@ public sealed class AcceptTxtIngestionHandlerTests
         var collection = repository.AddCollection();
         var contentStore = new InMemoryContentStore();
         var handler = new AcceptTxtIngestionHandler(repository, contentStore);
-        var command = new AcceptTxtIngestionCommand(collection.Id, "guide.txt", "same"u8.ToArray(), "source://guide");
+        var command = new AcceptTxtIngestionCommand(collection.ServiceClientId, collection.Id, "guide.txt", "same"u8.ToArray(), "source://guide");
 
         var first = await handler.HandleAsync(command);
         var duplicate = await handler.HandleAsync(command);
@@ -33,8 +33,8 @@ public sealed class AcceptTxtIngestionHandlerTests
         var collection = repository.AddCollection();
         var handler = new AcceptTxtIngestionHandler(repository, new InMemoryContentStore());
 
-        var first = await handler.HandleAsync(new AcceptTxtIngestionCommand(collection.Id, "guide.txt", "one"u8.ToArray(), "source://guide"));
-        var changed = await handler.HandleAsync(new AcceptTxtIngestionCommand(collection.Id, "guide.txt", "two"u8.ToArray(), "source://guide"));
+        var first = await handler.HandleAsync(new AcceptTxtIngestionCommand(collection.ServiceClientId, collection.Id, "guide.txt", "one"u8.ToArray(), "source://guide"));
+        var changed = await handler.HandleAsync(new AcceptTxtIngestionCommand(collection.ServiceClientId, collection.Id, "guide.txt", "two"u8.ToArray(), "source://guide"));
 
         var document = Assert.Single(repository.Documents);
         Assert.Equal(first.DocumentId, changed.DocumentId);
@@ -50,7 +50,7 @@ public sealed class AcceptTxtIngestionHandlerTests
         var repository = new InMemoryIngestionRepository();
         var collection = repository.AddCollection();
         var handler = new AcceptTxtIngestionHandler(repository, new InMemoryContentStore());
-        var command = new AcceptTxtIngestionCommand(collection.Id, "upload.txt", "same"u8.ToArray());
+        var command = new AcceptTxtIngestionCommand(collection.ServiceClientId, collection.Id, "upload.txt", "same"u8.ToArray());
 
         var first = await handler.HandleAsync(command);
         var second = await handler.HandleAsync(command);
@@ -58,6 +58,17 @@ public sealed class AcceptTxtIngestionHandlerTests
         Assert.NotEqual(first.DocumentId, second.DocumentId);
         Assert.Equal(2, repository.Documents.Count);
         Assert.Equal(2, repository.Operations.Count);
+    }
+
+    [Fact]
+    public async Task Foreign_collection_is_not_distinguishable_from_a_missing_collection()
+    {
+        var repository = new InMemoryIngestionRepository();
+        var collection = repository.AddCollection();
+        var handler = new AcceptTxtIngestionHandler(repository, new InMemoryContentStore());
+
+        await Assert.ThrowsAsync<ResourceNotFoundException>(() => handler.HandleAsync(
+            new AcceptTxtIngestionCommand(Guid.NewGuid(), collection.Id, "guide.txt", "content"u8.ToArray())));
     }
 
     [Fact]
@@ -71,7 +82,7 @@ public sealed class AcceptTxtIngestionHandlerTests
         cancellation.Cancel();
 
         await Assert.ThrowsAsync<InvalidOperationException>(() => handler.HandleAsync(
-            new AcceptTxtIngestionCommand(collection.Id, "guide.txt", "content"u8.ToArray()),
+            new AcceptTxtIngestionCommand(collection.ServiceClientId, collection.Id, "guide.txt", "content"u8.ToArray()),
             cancellation.Token));
 
         Assert.True(repository.DiscardChangesCalled);
@@ -90,7 +101,7 @@ public sealed class AcceptTxtIngestionHandlerTests
         var handler = new AcceptTxtIngestionHandler(repository, contentStore);
 
         await Assert.ThrowsAsync<InvalidOperationException>(() => handler.HandleAsync(
-            new AcceptTxtIngestionCommand(collection.Id, "guide.txt", "content"u8.ToArray())));
+            new AcceptTxtIngestionCommand(collection.ServiceClientId, collection.Id, "guide.txt", "content"u8.ToArray())));
 
         Assert.True(repository.DiscardChangesCalled);
         Assert.Empty(contentStore.StoredReferences);
@@ -99,7 +110,8 @@ public sealed class AcceptTxtIngestionHandlerTests
     [Fact]
     public async Task Unique_reference_conflict_returns_persisted_same_content_version()
     {
-        var repository = new InMemoryIngestionRepository { SaveFailure = new UniqueReferenceException() };
+        var repository = new InMemoryIngestionRepository();
+        repository.SaveFailures.Enqueue(new UniqueReferenceException());
         var collection = repository.AddCollection();
         var content = "content"u8.ToArray();
         var hash = ContentHash.FromBytes(content);
@@ -115,6 +127,7 @@ public sealed class AcceptTxtIngestionHandlerTests
         var handler = new AcceptTxtIngestionHandler(repository, contentStore);
 
         var result = await handler.HandleAsync(new AcceptTxtIngestionCommand(
+            collection.ServiceClientId,
             collection.Id,
             "guide.txt",
             content,
@@ -128,6 +141,40 @@ public sealed class AcceptTxtIngestionHandlerTests
         Assert.Empty(contentStore.StoredReferences);
     }
 
+    [Fact]
+    public async Task Unique_reference_conflict_with_changed_content_creates_a_new_version_and_operation()
+    {
+        var repository = new InMemoryIngestionRepository();
+        repository.SaveFailures.Enqueue(new UniqueReferenceException());
+        var collection = repository.AddCollection();
+        var winner = new Document(Guid.NewGuid(), collection.Id, "source://guide", DateTimeOffset.UtcNow);
+        winner.AddVersion(
+            Guid.NewGuid(),
+            "guide.txt",
+            ContentHash.FromBytes("one"u8),
+            ContentReference.ForVersion(Guid.NewGuid()),
+            DateTimeOffset.UtcNow);
+        repository.ConflictResolutionDocument = winner;
+        var contentStore = new InMemoryContentStore();
+        var handler = new AcceptTxtIngestionHandler(repository, contentStore);
+
+        var result = await handler.HandleAsync(new AcceptTxtIngestionCommand(
+            collection.ServiceClientId,
+            collection.Id,
+            "guide.txt",
+            "two"u8.ToArray(),
+            "source://guide"));
+
+        Assert.False(result.IsDuplicate);
+        Assert.Equal(winner.Id, result.DocumentId);
+        Assert.Equal(2, winner.Versions.Count);
+        Assert.Equal(2, winner.Versions[1].Number);
+        Assert.Equal(winner.Versions[1].Id, result.DocumentVersionId);
+        Assert.Equal(result.DocumentVersionId, Assert.Single(repository.Operations).DocumentVersionId);
+        Assert.NotNull(result.OperationId);
+        Assert.Single(contentStore.StoredReferences);
+    }
+
     private sealed class InMemoryIngestionRepository : IIngestionRepository
     {
         public List<Collection> Collections { get; } = [];
@@ -138,33 +185,44 @@ public sealed class AcceptTxtIngestionHandlerTests
 
         public Exception? SaveFailure { get; init; }
 
+        public Queue<Exception> SaveFailures { get; } = [];
+
         public Document? ConflictResolutionDocument { get; set; }
 
         public bool DiscardChangesCalled { get; private set; }
 
+        private int _externalReferenceLookupCount;
+
         public Collection AddCollection()
         {
-            var collection = new Collection(Guid.NewGuid(), "Test collection", DateTimeOffset.UtcNow);
+            var collection = new Collection(Guid.NewGuid(), Guid.NewGuid(), "Test collection", DateTimeOffset.UtcNow, EmbeddingProfile.Default);
             Collections.Add(collection);
             return collection;
         }
 
-        public Task<Collection?> GetCollectionAsync(Guid collectionId, CancellationToken cancellationToken) =>
-            Task.FromResult(Collections.SingleOrDefault(collection => collection.Id == collectionId));
+        public Task<Collection?> GetCollectionAsync(Guid serviceClientId, Guid collectionId, CancellationToken cancellationToken) =>
+            Task.FromResult(Collections.SingleOrDefault(collection => collection.Id == collectionId && collection.ServiceClientId == serviceClientId));
 
-        public Task<Document?> FindByExternalReferenceAsync(Guid collectionId, string externalReference, CancellationToken cancellationToken) =>
-            Task.FromResult(Documents.SingleOrDefault(document =>
-                document.CollectionId == collectionId && document.ExternalReference == externalReference));
-
-        public Task<Document?> FindByExternalReferenceForConflictResolutionAsync(
+        public Task<IExternalReferenceTransaction> BeginExternalReferenceTransactionAsync(
             Guid collectionId,
             string externalReference,
             CancellationToken cancellationToken) =>
-            Task.FromResult(ConflictResolutionDocument);
+            Task.FromResult<IExternalReferenceTransaction>(NoOpExternalReferenceTransaction.Instance);
+
+        public Task<Document?> FindByExternalReferenceAsync(Guid collectionId, string externalReference, CancellationToken cancellationToken) =>
+            Task.FromResult(
+                ConflictResolutionDocument is not null && _externalReferenceLookupCount++ > 0
+                    ? ConflictResolutionDocument
+                    : Documents.SingleOrDefault(document =>
+                        document.CollectionId == collectionId && document.ExternalReference == externalReference));
 
         public bool IsExternalReferenceUniqueConstraintViolation(Exception exception) => exception is UniqueReferenceException;
 
         public void AddDocument(Document document) => Documents.Add(document);
+
+        public void AddDocumentVersion(DocumentVersion version)
+        {
+        }
 
         public void AddOperation(Operation operation) => Operations.Add(operation);
 
@@ -176,7 +234,18 @@ public sealed class AcceptTxtIngestionHandlerTests
         }
 
         public Task<int> SaveChangesAsync(CancellationToken cancellationToken) =>
-            SaveFailure is null ? Task.FromResult(0) : Task.FromException<int>(SaveFailure);
+            SaveFailures.TryDequeue(out var failure)
+                ? Task.FromException<int>(failure)
+                : SaveFailure is null ? Task.FromResult(0) : Task.FromException<int>(SaveFailure);
+
+        private sealed class NoOpExternalReferenceTransaction : IExternalReferenceTransaction
+        {
+            public static readonly NoOpExternalReferenceTransaction Instance = new();
+
+            public Task CommitAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+
+            public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+        }
     }
 
     private sealed class InMemoryContentStore : IImmutableContentStore
