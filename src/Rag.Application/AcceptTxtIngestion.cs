@@ -166,6 +166,7 @@ public static class ApplicationServiceCollectionExtensions
     {
         services.AddScoped<AcceptTxtIngestionHandler>();
         services.AddScoped<QueryEmbeddingService>();
+        services.AddScoped<SemanticRetrievalHandler>();
         return services;
     }
 }

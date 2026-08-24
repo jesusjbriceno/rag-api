@@ -53,6 +53,7 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddSingleton<IOperationClaimRepository, OperationClaimRepository>();
         services.AddSingleton<IOperationCompletionRepository, OperationCompletionRepository>();
         services.AddScoped<ICollectionEmbeddingProfileRepository, CollectionEmbeddingProfileRepository>();
+        services.AddScoped<ISemanticRetrievalRepository, PostgresSemanticRetrievalRepository>();
         services.AddHttpClient<IEmbeddingProvider, OllamaEmbeddingProvider>((serviceProvider, client) =>
         {
             var ollama = serviceProvider.GetRequiredService<IOptions<OllamaOptions>>().Value;
