@@ -1,0 +1,90 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready --username=$$POSTGRES_USER --dbname=$$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+    restart: unless-stopped
+
+  ollama:
+    image: ollama/ollama:0.12.3
+    volumes:
+      - ollama-data:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+    restart: unless-stopped
+
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: operator
+    command: ["migrate"]
+    environment: &rag-environment
+      ConnectionStrings__Rag: Host=postgres;Port=5432;Database=${POSTGRES_DB};Username=${POSTGRES_USER};Password=${POSTGRES_PASSWORD}
+      ContentStore__RootPath: /app/content
+      Ollama__BaseUrl: http://ollama:11434/
+      Jwt__Issuer: ${JWT__ISSUER}
+      Jwt__Audience: ${JWT__AUDIENCE}
+      Jwt__CurrentSigningKey__KeyId: ${JWT__CURRENT_SIGNING_KEY__KEY_ID}
+      Jwt__CurrentSigningKey__PrivateKeyPem: ${JWT__CURRENT_SIGNING_KEY__PRIVATE_KEY_PEM}
+      Jwt__ValidationKeys__0__KeyId: ${JWT__VALIDATION_KEYS__0__KEY_ID}
+      Jwt__ValidationKeys__0__PublicKeyPem: ${JWT__VALIDATION_KEYS__0__PUBLIC_KEY_PEM}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  model-pull:
+    image: ollama/ollama:0.12.3
+    entrypoint: ["/bin/sh", "-ec"]
+    command: ["ollama pull \"$$OLLAMA_MODEL\""]
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+      OLLAMA_MODEL: ${OLLAMA_MODEL}
+    volumes:
+      - ollama-data:/root/.ollama
+    depends_on:
+      ollama:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: api
+    environment: *rag-environment
+    volumes:
+      - rag-content:/app/content
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      model-pull:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "curl --fail --silent --show-error http://127.0.0.1:8080/api/v1/health/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
+  ollama-data:
+  rag-content:

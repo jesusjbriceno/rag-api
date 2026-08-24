@@ -73,6 +73,14 @@ public static class InfrastructureServiceCollectionExtensions
             var ollama = serviceProvider.GetRequiredService<IOptions<OllamaOptions>>().Value;
             client.BaseAddress = new Uri(ollama.BaseUrl, UriKind.Absolute);
         });
+        services.AddHttpClient<OllamaModelReadinessHealthCheck>((serviceProvider, client) =>
+        {
+            var ollama = serviceProvider.GetRequiredService<IOptions<OllamaOptions>>().Value;
+            client.BaseAddress = new Uri(ollama.BaseUrl, UriKind.Absolute);
+        });
+        services.AddHealthChecks()
+            .AddCheck<PostgreSqlReadinessHealthCheck>("postgresql", tags: ["ready"])
+            .AddCheck<OllamaModelReadinessHealthCheck>("ollama-model", tags: ["ready"]);
         services.AddSingleton<TxtChunker>();
         services.AddSingleton<IOperationProcessor, TxtOperationProcessor>();
         services.AddHostedService<OperationWorker>();

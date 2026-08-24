@@ -1,0 +1,4 @@
+services:
+  api:
+    ports:
+      - 127.0.0.1:${RAG_API_PORT:-8080}:8080

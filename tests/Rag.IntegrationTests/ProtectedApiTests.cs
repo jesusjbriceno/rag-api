@@ -61,6 +61,16 @@ public sealed class ProtectedApiTests(PostgreSqlFixture fixture) : IAsyncLifetim
     }
 
     [Fact]
+    public async Task Liveness_is_anonymous_and_readiness_is_not_hidden_by_authorization()
+    {
+        var liveness = await _client.GetAsync("/api/v1/health/live");
+        var readiness = await _client.GetAsync("/api/v1/health/ready");
+
+        Assert.Equal(HttpStatusCode.OK, liveness.StatusCode);
+        Assert.NotEqual(HttpStatusCode.Unauthorized, readiness.StatusCode);
+    }
+
+    [Fact]
     public async Task Collection_and_txt_ingestion_enforce_owner_and_input_contracts()
     {
         var owner = await CreateAuthenticatedClientAsync("owner");

@@ -1,4 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Hosting;
 using Rag.Application;
 using Rag.Infrastructure;
@@ -24,6 +25,14 @@ try
             {
                 var issued = await credentials.IssueAsync(args[1], expiresAt: null);
                 WriteCredential(issued);
+                break;
+            }
+        case "migrate" when args.Length == 1:
+            {
+                var contextFactory = scope.ServiceProvider.GetRequiredService<IDbContextFactory<IngestionDbContext>>();
+                await using var dbContext = await contextFactory.CreateDbContextAsync();
+                await dbContext.Database.MigrateAsync();
+                Console.WriteLine("Database migrations applied.");
                 break;
             }
         case "rotate" when args.Length == 2:
@@ -66,13 +75,14 @@ return 0;
 static void WriteCredential(IssuedCredential issued)
 {
     Console.WriteLine($"KeyId: {issued.KeyId}");
+    Console.WriteLine($"ServiceClientId: {issued.ServiceClientId:D}");
     Console.WriteLine($"Secret: {issued.Secret}");
     Console.WriteLine("Store the secret securely. It cannot be displayed again.");
 }
 
 static int Usage()
 {
-    Console.Error.WriteLine("Usage: Rag.Operator issue <service-client-name> | rotate <key-id> | revoke <key-id>");
+    Console.Error.WriteLine("Usage: Rag.Operator migrate | issue <service-client-name> | rotate <key-id> | revoke <key-id>");
     Console.Error.WriteLine("       Rag.Operator collections list-unowned | collections assign-owner <collection-id> <service-client-id>");
     Console.Error.WriteLine("Ownership migration: apply the preparatory migration, list unowned collections, assign every collection deliberately, then rerun the enforcement migration.");
     Console.Error.WriteLine("The assignment command never creates an owner or reassigns an owned collection.");

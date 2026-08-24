@@ -1,4 +1,4 @@
-# Se excluye la carpeta de propuestas
+# Local planning artifacts
 .proposals
 
 # Codegraph
@@ -7,3 +7,10 @@
 # .NET build artifacts
 bin/
 obj/
+
+# Deployment secrets and local runtime state
+.env
+*.pem
+*.key
+content/
+backups/
