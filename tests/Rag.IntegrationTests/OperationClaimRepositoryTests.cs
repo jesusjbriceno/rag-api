@@ -212,7 +212,7 @@ public sealed class OperationClaimRepositoryTests(PostgreSqlFixture fixture)
     {
         await using var context = new IngestionDbContext(options);
         await context.Database.MigrateAsync();
-        await context.Database.ExecuteSqlRawAsync("TRUNCATE TABLE operations, document_versions, documents, collections CASCADE;");
+        await context.Database.ExecuteSqlRawAsync("TRUNCATE TABLE client_credentials, service_clients, operations, document_versions, documents, collections CASCADE;");
     }
 
     private static async Task<Guid[]> AddOperationsAsync(

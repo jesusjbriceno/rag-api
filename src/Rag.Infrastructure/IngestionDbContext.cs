@@ -19,6 +19,10 @@ public sealed class IngestionDbContext(DbContextOptions<IngestionDbContext> opti
 
     public DbSet<ChunkEmbedding> ChunkEmbeddings => Set<ChunkEmbedding>();
 
+    public DbSet<ServiceClient> ServiceClients => Set<ServiceClient>();
+
+    public DbSet<ClientCredential> ClientCredentials => Set<ClientCredential>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.HasPostgresExtension("vector");
@@ -140,6 +144,46 @@ public sealed class IngestionDbContext(DbContextOptions<IngestionDbContext> opti
             builder.HasOne<Chunk>()
                 .WithMany()
                 .HasForeignKey(embedding => embedding.ChunkId)
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<ServiceClient>(builder =>
+        {
+            builder.ToTable("service_clients");
+            builder.HasKey(client => client.Id);
+            builder.Property(client => client.Name).HasMaxLength(200).IsRequired();
+            builder.Property(client => client.CreatedAt).IsRequired();
+            builder.HasIndex(client => client.Name).IsUnique();
+        });
+
+        modelBuilder.Entity<ClientCredential>(builder =>
+        {
+            builder.ToTable("client_credentials");
+            builder.HasKey(credential => credential.Id);
+            builder.Property(credential => credential.KeyId).HasMaxLength(27).IsRequired();
+            builder.Property(credential => credential.SecretHash).HasColumnType("bytea").IsRequired();
+            builder.Property(credential => credential.SecretSalt).HasColumnType("bytea").IsRequired();
+            builder.Property(credential => credential.HashVersion).IsRequired();
+            builder.Property(credential => credential.Version).IsConcurrencyToken().IsRequired();
+            builder.Property(credential => credential.Status).HasConversion<string>().HasMaxLength(20).IsRequired();
+            builder.Property(credential => credential.CreatedAt).IsRequired();
+            builder.HasIndex(credential => credential.KeyId).IsUnique();
+            builder.HasIndex(credential => new { credential.ServiceClientId, credential.Status });
+            builder.ToTable(table => table.HasCheckConstraint(
+                "CK_client_credentials_KeyId_format",
+                "\"KeyId\" ~ '^[A-Za-z0-9_-]{27}$'"));
+            builder.ToTable(table => table.HasCheckConstraint(
+                "CK_client_credentials_secret_material",
+                "octet_length(\"SecretHash\") = 32 AND octet_length(\"SecretSalt\") = 16 AND \"HashVersion\" > 0"));
+            builder.ToTable(table => table.HasCheckConstraint(
+                "CK_client_credentials_version_positive",
+                "\"Version\" > 0"));
+            builder.ToTable(table => table.HasCheckConstraint(
+                "CK_client_credentials_status_valid",
+                "\"Status\" IN ('Active', 'Revoked')"));
+            builder.HasOne<ServiceClient>()
+                .WithMany()
+                .HasForeignKey(credential => credential.ServiceClientId)
                 .OnDelete(DeleteBehavior.Cascade);
         });
     }

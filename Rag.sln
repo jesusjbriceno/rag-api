@@ -14,6 +14,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Rag.UnitTests", "tests\Rag.
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Rag.IntegrationTests", "tests\Rag.IntegrationTests\Rag.IntegrationTests.csproj", "{9FEB051D-1CFC-4973-B1FF-6A70D0C1163B}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Rag.Operator", "src\Rag.Operator\Rag.Operator.csproj", "{BA057F08-A750-4CFD-8260-D53B12D78E63}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -44,5 +46,9 @@ Global
 		{9FEB051D-1CFC-4973-B1FF-6A70D0C1163B}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{9FEB051D-1CFC-4973-B1FF-6A70D0C1163B}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{9FEB051D-1CFC-4973-B1FF-6A70D0C1163B}.Release|Any CPU.Build.0 = Release|Any CPU
+		{BA057F08-A750-4CFD-8260-D53B12D78E63}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{BA057F08-A750-4CFD-8260-D53B12D78E63}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{BA057F08-A750-4CFD-8260-D53B12D78E63}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{BA057F08-A750-4CFD-8260-D53B12D78E63}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 EndGlobal

@@ -18,7 +18,7 @@ public sealed class IngestionDbContextTests(PostgreSqlFixture fixture)
         await using var context = new IngestionDbContext(options);
 
         await context.Database.MigrateAsync();
-        await context.Database.ExecuteSqlRawAsync("TRUNCATE TABLE operations, document_versions, documents, collections CASCADE;");
+        await context.Database.ExecuteSqlRawAsync("TRUNCATE TABLE client_credentials, service_clients, operations, document_versions, documents, collections CASCADE;");
         var now = DateTimeOffset.UtcNow;
         var collection = new Collection(Guid.NewGuid(), "Integration collection", now);
         var document = new Document(Guid.NewGuid(), collection.Id, "source://integration", now);
@@ -48,7 +48,7 @@ public sealed class IngestionDbContextTests(PostgreSqlFixture fixture)
         await using var context = new IngestionDbContext(options);
 
         await context.Database.MigrateAsync();
-        await context.Database.ExecuteSqlRawAsync("TRUNCATE TABLE operations, document_versions, documents, collections CASCADE;");
+        await context.Database.ExecuteSqlRawAsync("TRUNCATE TABLE client_credentials, service_clients, operations, document_versions, documents, collections CASCADE;");
         var now = DateTimeOffset.UtcNow;
         var collection = new Collection(Guid.NewGuid(), "Integration collection", now);
         var sourceDocument = new Document(Guid.NewGuid(), collection.Id, "source://first", now);
@@ -87,7 +87,7 @@ public sealed class IngestionDbContextTests(PostgreSqlFixture fixture)
         await using var context = new IngestionDbContext(options);
 
         await context.Database.MigrateAsync();
-        await context.Database.ExecuteSqlRawAsync("TRUNCATE TABLE operations, chunks, document_versions, documents, collections CASCADE;");
+        await context.Database.ExecuteSqlRawAsync("TRUNCATE TABLE client_credentials, service_clients, operations, chunks, document_versions, documents, collections CASCADE;");
         var now = DateTimeOffset.UtcNow;
         var collection = new Collection(Guid.NewGuid(), "Integration collection", now);
         var document = new Document(Guid.NewGuid(), collection.Id, "source://chunk-whitespace", now);
@@ -120,7 +120,7 @@ public sealed class IngestionDbContextTests(PostgreSqlFixture fixture)
         await using var context = new IngestionDbContext(options);
 
         await context.Database.MigrateAsync();
-        await context.Database.ExecuteSqlRawAsync("TRUNCATE TABLE operations, chunks, document_versions, documents, collections CASCADE;");
+        await context.Database.ExecuteSqlRawAsync("TRUNCATE TABLE client_credentials, service_clients, operations, chunks, document_versions, documents, collections CASCADE;");
         var now = DateTimeOffset.UtcNow;
         var collection = new Collection(Guid.NewGuid(), "Embedding collection", now);
         var document = new Document(Guid.NewGuid(), collection.Id, "source://embedding", now);
@@ -152,7 +152,7 @@ public sealed class IngestionDbContextTests(PostgreSqlFixture fixture)
         await using var context = new IngestionDbContext(options);
 
         await context.Database.MigrateAsync();
-        await context.Database.ExecuteSqlRawAsync("TRUNCATE TABLE operations, chunks, document_versions, documents, collections CASCADE;");
+        await context.Database.ExecuteSqlRawAsync("TRUNCATE TABLE client_credentials, service_clients, operations, chunks, document_versions, documents, collections CASCADE;");
         var collection = new Collection(Guid.NewGuid(), "Immutable embedding collection", DateTimeOffset.UtcNow);
         context.Collections.Add(collection);
         await context.SaveChangesAsync();
@@ -173,7 +173,7 @@ public sealed class IngestionDbContextTests(PostgreSqlFixture fixture)
         await using var context = new IngestionDbContext(options);
 
         await context.Database.MigrateAsync();
-        await context.Database.ExecuteSqlRawAsync("TRUNCATE TABLE operations, chunks, document_versions, documents, collections CASCADE;");
+        await context.Database.ExecuteSqlRawAsync("TRUNCATE TABLE client_credentials, service_clients, operations, chunks, document_versions, documents, collections CASCADE;");
         var now = DateTimeOffset.UtcNow;
         var sourceCollection = new Collection(Guid.NewGuid(), "Source collection", now);
         var targetCollection = new Collection(Guid.NewGuid(), "Target collection", now);
@@ -221,7 +221,7 @@ public sealed class IngestionDbContextTests(PostgreSqlFixture fixture)
         await using var context = new IngestionDbContext(options);
 
         await context.Database.MigrateAsync();
-        await context.Database.ExecuteSqlRawAsync("TRUNCATE TABLE operations, chunks, document_versions, documents, collections CASCADE;");
+        await context.Database.ExecuteSqlRawAsync("TRUNCATE TABLE client_credentials, service_clients, operations, chunks, document_versions, documents, collections CASCADE;");
         var now = DateTimeOffset.UtcNow;
         var sourceCollection = new Collection(Guid.NewGuid(), "Source collection", now);
         var targetCollection = new Collection(Guid.NewGuid(), "Target collection", now);

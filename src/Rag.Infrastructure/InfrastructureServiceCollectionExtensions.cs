@@ -48,12 +48,22 @@ public static class InfrastructureServiceCollectionExtensions
                 options => options.WorkerId is null || options.WorkerId.Trim().Length is > 0 and <= 200,
                 "OperationWorker:WorkerId must be omitted or contain at most 200 characters.")
             .ValidateOnStart();
+        services.AddOptions<JwtOptions>()
+            .Bind(configuration.GetSection(JwtOptions.SectionName))
+            .Validate(options => TryValidateJwtOptions(options, out _), "JWT authentication configuration is invalid.")
+            .ValidateOnStart();
+        services.AddSingleton(serviceProvider => new JwtKeyMaterial(serviceProvider.GetRequiredService<IOptions<JwtOptions>>().Value));
         services.AddScoped<IIngestionRepository, IngestionRepository>();
         services.AddSingleton<IImmutableContentStore>(_ => new FileSystemImmutableContentStore(contentRoot));
         services.AddSingleton<IOperationClaimRepository, OperationClaimRepository>();
         services.AddSingleton<IOperationCompletionRepository, OperationCompletionRepository>();
         services.AddScoped<ICollectionEmbeddingProfileRepository, CollectionEmbeddingProfileRepository>();
         services.AddScoped<ISemanticRetrievalRepository, PostgresSemanticRetrievalRepository>();
+        services.AddScoped<ICredentialRepository, CredentialRepository>();
+        services.AddScoped<ICredentialStateValidator, CredentialRepository>();
+        services.AddSingleton<ICredentialGenerator, CredentialGenerator>();
+        services.AddSingleton<ICredentialSecretHasher, Argon2idCredentialSecretHasher>();
+        services.AddSingleton<IAccessTokenIssuer, JwtAccessTokenIssuer>();
         services.AddHttpClient<IEmbeddingProvider, OllamaEmbeddingProvider>((serviceProvider, client) =>
         {
             var ollama = serviceProvider.GetRequiredService<IOptions<OllamaOptions>>().Value;
@@ -74,6 +84,22 @@ public static class InfrastructureServiceCollectionExtensions
             return true;
         }
         catch (Exception caught) when (caught is ArgumentException or InvalidOperationException)
+        {
+            exception = caught;
+            return false;
+        }
+    }
+
+    private static bool TryValidateJwtOptions(JwtOptions options, out Exception? exception)
+    {
+        try
+        {
+            options.Validate();
+            using var keyMaterial = new JwtKeyMaterial(options);
+            exception = null;
+            return true;
+        }
+        catch (Exception caught) when (caught is ArgumentException or InvalidOperationException or System.Security.Cryptography.CryptographicException)
         {
             exception = caught;
             return false;

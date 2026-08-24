@@ -245,7 +245,7 @@ public sealed class TxtOperationProcessorTests(PostgreSqlFixture fixture)
     {
         await using var context = new IngestionDbContext(options);
         await context.Database.MigrateAsync();
-        await context.Database.ExecuteSqlRawAsync("TRUNCATE TABLE operations, chunks, document_versions, documents, collections CASCADE;");
+        await context.Database.ExecuteSqlRawAsync("TRUNCATE TABLE client_credentials, service_clients, operations, chunks, document_versions, documents, collections CASCADE;");
     }
 
     private async Task<(Operation Operation, DocumentVersion Version)> AddClaimedOperationAsync(

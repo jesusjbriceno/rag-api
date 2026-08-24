@@ -29,7 +29,7 @@ public sealed class EmbeddingOptions
 
     public EmbeddingProfileOptions Default { get; set; } = EmbeddingProfileOptions.FromProfile(EmbeddingProfile.Default);
 
-    public List<EmbeddingProfileOptions> AllowedProfiles { get; set; } = [EmbeddingProfileOptions.FromProfile(EmbeddingProfile.Default)];
+    public List<EmbeddingProfileOptions> AllowedProfiles { get; set; } = [];
 
     public ValidatedEmbeddingOptions Validate()
     {
