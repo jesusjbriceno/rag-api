@@ -158,6 +158,7 @@ public sealed class FileSystemImmutableContentStoreTests
         var holdingPath = Path.Combine(rootPath, "versions-holding");
         var outsidePath = Path.Combine(Path.GetTempPath(), $"rag-content-outside-{Guid.NewGuid():N}");
         using var cancellation = new CancellationTokenSource();
+        var firstSwap = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         try
         {
             Directory.CreateDirectory(versionsPath);
@@ -167,7 +168,9 @@ public sealed class FileSystemImmutableContentStoreTests
                 versionsPath,
                 holdingPath,
                 outsidePath,
+                firstSwap,
                 cancellation.Token));
+            await firstSwap.Task.WaitAsync(TimeSpan.FromSeconds(10));
             var content = new byte[1024 * 1024];
             Random.Shared.NextBytes(content);
 
@@ -217,6 +220,7 @@ public sealed class FileSystemImmutableContentStoreTests
         string versionsPath,
         string holdingPath,
         string outsidePath,
+        TaskCompletionSource firstSwap,
         CancellationToken cancellationToken)
     {
         var swaps = 0;
@@ -233,6 +237,7 @@ public sealed class FileSystemImmutableContentStoreTests
                 {
                     Directory.CreateSymbolicLink(versionsPath, outsidePath);
                     swaps++;
+                    firstSwap.TrySetResult();
                 }
 
                 Thread.Yield();
