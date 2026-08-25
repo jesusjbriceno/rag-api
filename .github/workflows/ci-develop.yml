@@ -167,7 +167,7 @@ jobs:
           exit-code: '1'
           ignore-unfixed: 'false'
           format: table
-          version: v0.65.0
+          version: v0.74.0
 
       # Only the exact archive that was SBOM'd and scanned is uploaded, and
       # only by digest (no tag), so no registry image becomes pullable before
