@@ -1,0 +1,19 @@
+<Project>
+  <PropertyGroup>
+    <!--
+      Default version metadata for local builds. CI overrides these before
+      publication via command-line properties (e.g. -p:Version=... and
+      -p:InformationalVersion=...) so the exact publication value is preserved:
+
+        Version               numeric SemVer with the leading 'v' stripped (e.g. 0.1.0-rc.1)
+        InformationalVersion  exact publication value (e.g. v0.1.0-rc.1 or develop-<sha>)
+
+      The default falls back to the foundation pre-release version.
+    -->
+    <Version Condition="'$(Version)' == ''">0.1.0-rc.1</Version>
+    <InformationalVersion Condition="'$(InformationalVersion)' == ''">$(Version)</InformationalVersion>
+    <!-- Keep InformationalVersion verbatim: the SDK otherwise appends "+<SourceRevisionId>",
+         which would break the exact-publication-value contract for image/health metadata. -->
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+  </PropertyGroup>
+</Project>

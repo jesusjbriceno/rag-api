@@ -39,10 +39,8 @@ services:
     restart: unless-stopped
 
   migrate:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      target: operator
+    image: ghcr.io/jesusjbriceno/rag-operator:${RAG_API_IMAGE_TAG}
+    pull_policy: always
     command: ["migrate"]
     environment: &rag-environment
       ConnectionStrings__Rag: Host=postgres;Port=5432;Database=${POSTGRES_DB};Username=${POSTGRES_USER};Password=${POSTGRES_PASSWORD}
@@ -60,10 +58,8 @@ services:
     restart: "no"
 
   api:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      target: api
+    image: ghcr.io/jesusjbriceno/rag-api:${RAG_API_IMAGE_TAG}
+    pull_policy: always
     environment: *rag-environment
     volumes:
       - rag-content:/app/content

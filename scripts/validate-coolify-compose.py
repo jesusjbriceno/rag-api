@@ -1,5 +1,6 @@
 import json
 import pathlib
+import re
 import sys
 
 SOURCE_URL = "https://huggingface.co/Qwen/Qwen3-Embedding-0.6B-GGUF/resolve/370f27d7550e0def9b39c1f16d3fbaa13aa67728/Qwen3-Embedding-0.6B-Q8_0.gguf"
@@ -8,6 +9,27 @@ EXPECTED_BYTES = "639150592"
 EXPECTED_SHA256 = "06507c7b42688469c4e7298b0a1e16deff06caf291cf0a5b278c308249c3e439"
 DOWNLOADER_IMAGE = "curlimages/curl@sha256:94e9e444bcba979c2ea12e27ae39bee4cd10bc7041a472c4727a558e213744e6"
 SERVER_IMAGE = "ghcr.io/ggml-org/llama.cpp@sha256:c005e79321f8e5731ec49a7f736aaeaac9465926c1e8f4c199c1d8a8996f26ef"
+
+# Production application images: one coordinated immutable tag across both repositories.
+API_IMAGE_REPOSITORY = "ghcr.io/jesusjbriceno/rag-api"
+OPERATOR_IMAGE_REPOSITORY = "ghcr.io/jesusjbriceno/rag-operator"
+APP_IMAGES = {
+    "api": API_IMAGE_REPOSITORY,
+    "migrate": OPERATOR_IMAGE_REPOSITORY,
+}
+# Immutable tags only: exact semver (vX.Y.Z[-prerelease]) or develop-<40-char-sha>. Never latest/floating.
+IMMUTABLE_TAG_PATTERN = re.compile(r"^(v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?|develop-[0-9a-f]{40})$")
+
+
+def split_image_reference(reference):
+    digest = None
+    if "@" in reference:
+        reference, digest = reference.rsplit("@", 1)
+    if ":" in reference:
+        repository, tag = reference.rsplit(":", 1)
+    else:
+        repository, tag = reference, ""
+    return repository, tag, digest
 
 
 def mount_target(service, target):
@@ -55,6 +77,31 @@ if any(argument not in command for argument in required_command):
     raise SystemExit("llama-cpp must use the fixed CPU-only, offline embedding runtime command.")
 if services["llama-cpp"].get("gpus") or services["llama-cpp"].get("runtime"):
     raise SystemExit("llama-cpp must not request a GPU runtime.")
+
+for name, expected_repository in APP_IMAGES.items():
+    service = services[name]
+    if service.get("build"):
+        raise SystemExit(f"{name} must not declare a local build; production Compose is pull-only.")
+    image = service.get("image")
+    if not image:
+        raise SystemExit(f"{name} must reference a pinned GHCR image.")
+    repository, tag, digest = split_image_reference(image)
+    if repository != expected_repository:
+        raise SystemExit(
+            f"{name} must use the {expected_repository} repository; found {repository!r} (repository drift)."
+        )
+    if digest is not None:
+        raise SystemExit(f"{name} must reference a version tag, not a digest.")
+    if not tag or tag == "latest":
+        raise SystemExit(f"{name} image tag must not be empty or 'latest'.")
+    if not IMMUTABLE_TAG_PATTERN.fullmatch(tag):
+        raise SystemExit(
+            f"{name} image tag {tag!r} is not an immutable version tag (vX.Y.Z[-prerelease] or develop-<sha>)."
+        )
+    if service.get("pull_policy") != "always":
+        raise SystemExit(
+            f"{name} must set pull_policy: always so production pulls and never falls back to a local build."
+        )
 
 api_environment = services["api"].get("environment", {})
 if api_environment.get("LlamaCpp__BaseUrl") != "http://llama-cpp:8080/":
