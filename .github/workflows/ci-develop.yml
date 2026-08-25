@@ -219,7 +219,8 @@ jobs:
                   "uri": "git+https://github.com/jesusjbriceno/rag-api@refs/heads/develop",
                   "digest": { "sha1": "${GITHUB_SHA}" }
                 }
-              },
+              }
+            },
             "runDetails": {
               "builder": {
                 "id": "https://github.com/jesusjbriceno/rag-api/.github/workflows/ci-develop.yml@refs/heads/develop"
@@ -234,7 +235,13 @@ jobs:
             type == "object"
             and (keys | sort == ["buildDefinition", "runDetails"])
             and (.buildDefinition | type == "object" and has("buildType") and has("externalParameters"))
+            and (.buildDefinition.buildType | type == "string" and length > 0)
+            and (.buildDefinition.externalParameters.source | type == "object" and has("uri") and has("digest"))
+            and (.buildDefinition.externalParameters.source.uri | type == "string" and length > 0)
+            and (.buildDefinition.externalParameters.source.digest.sha1 | type == "string" and test("^[0-9a-f]{40}$"))
             and (.runDetails | type == "object" and has("builder") and has("metadata"))
+            and (.runDetails.builder.id | type == "string" and length > 0)
+            and (.runDetails.metadata.invocationId | type == "string" and length > 0)
           ' "${provenance}" >/dev/null
           cosign attest --yes \
             --type slsaprovenance1 \
