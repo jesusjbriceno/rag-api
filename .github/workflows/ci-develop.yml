@@ -249,17 +249,17 @@ jobs:
             "${image}@${digest}"
 
           # Verify signature, SBOM attestation, and provenance attestation.
-          cosign verify --yes \
+          cosign verify \
             --certificate-oidc-issuer "${issuer}" \
             --certificate-identity "${identity}" \
             "${image}@${digest}"
 
-          cosign verify-attestation --yes --type spdxjson \
+          cosign verify-attestation --type spdxjson \
             --certificate-oidc-issuer "${issuer}" \
             --certificate-identity "${identity}" \
             "${image}@${digest}"
 
-          cosign verify-attestation --yes --type slsaprovenance1 \
+          cosign verify-attestation --type slsaprovenance1 \
             --certificate-oidc-issuer "${issuer}" \
             --certificate-identity "${identity}" \
             "${image}@${digest}"
