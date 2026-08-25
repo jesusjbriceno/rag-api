@@ -198,12 +198,32 @@ jobs:
           sbom="${RUNNER_TEMP}/sbom.spdx.json"
           identity="https://github.com/jesusjbriceno/rag-api/.github/workflows/ci-develop.yml@refs/heads/develop"
           issuer="https://token.actions.githubusercontent.com"
+          remote_timeout="5m"
+          exec 3>&2
+
+          run_remote() {
+            local label="$1"
+            shift
+
+            printf '%s\n' "::notice::remote-operation:${label}:started" >&3
+            if timeout --foreground --signal=TERM --kill-after=30s "${remote_timeout}" "$@"; then
+              printf '%s\n' "::notice::remote-operation:${label}:completed" >&3
+            else
+              local exit_code="$?"
+              if [[ "${exit_code}" -eq 124 || "${exit_code}" -eq 137 ]]; then
+                printf '%s\n' "::error::remote-operation:${label}:timed-out" >&3
+              else
+                printf '%s\n' "::error::remote-operation:${label}:failed" >&3
+              fi
+              return "${exit_code}"
+            fi
+          }
 
           # Keyless signature over the image manifest digest.
-          cosign sign --yes "${image}@${digest}"
+          run_remote "cosign-sign" cosign sign --yes "${image}@${digest}"
 
           # Attach the SPDX SBOM as an attestation.
-          cosign attest --yes \
+          run_remote "cosign-attest-spdx" cosign attest --yes \
             --type spdxjson \
             --predicate "${sbom}" \
             "${image}@${digest}"
@@ -243,37 +263,49 @@ jobs:
             and (.runDetails.builder.id | type == "string" and length > 0)
             and (.runDetails.metadata.invocationId | type == "string" and length > 0)
           ' "${provenance}" >/dev/null
-          cosign attest --yes \
+          run_remote "cosign-attest-slsa" cosign attest --yes \
             --type slsaprovenance1 \
             --predicate "${provenance}" \
             "${image}@${digest}"
 
           # Verify signature, SBOM attestation, and provenance attestation.
-          cosign verify \
+          run_remote "cosign-verify-signature" cosign verify \
             --certificate-oidc-issuer "${issuer}" \
             --certificate-identity "${identity}" \
             "${image}@${digest}"
 
-          cosign verify-attestation --type spdxjson \
+          run_remote "cosign-verify-spdx" cosign verify-attestation --type spdxjson \
             --certificate-oidc-issuer "${issuer}" \
             --certificate-identity "${identity}" \
             "${image}@${digest}"
 
-          cosign verify-attestation --type slsaprovenance1 \
+          run_remote "cosign-verify-slsa" cosign verify-attestation --type slsaprovenance1 \
             --certificate-oidc-issuer "${issuer}" \
             --certificate-identity "${identity}" \
             "${image}@${digest}"
 
           # Collision check: never move an existing final tag to a different digest.
-          if existing_digest="$(docker buildx imagetools inspect --format '{{.Manifest.Digest}}' "${image}:${publication_tag}" 2>/dev/null)"; then
+          inspection_output="${RUNNER_TEMP}/final-tag-inspection.txt"
+          inspection_error="${RUNNER_TEMP}/final-tag-inspection.err"
+          if run_remote "ghcr-inspect-final-tag" docker buildx imagetools inspect \
+            --format '{{.Manifest.Digest}}' "${image}:${publication_tag}" >"${inspection_output}" 2>"${inspection_error}"; then
+            existing_digest="$(<"${inspection_output}")"
             if [[ "${existing_digest}" != "${digest}" ]]; then
               echo "::error::Final tag ${image}:${publication_tag} already exists with digest ${existing_digest}; refusing to move it to ${digest}."
               exit 1
             fi
             echo "Final tag ${image}:${publication_tag} already exists with the same digest; publication is idempotent."
           else
+            inspection_exit_code="$?"
+            if ! grep -Eqi 'manifest unknown|name unknown|not found' "${inspection_error}"; then
+              rm -f "${inspection_error}"
+              printf '%s\n' "::error::remote-operation:ghcr-inspect-final-tag:unresolved" >&3
+              exit "${inspection_exit_code}"
+            fi
+            rm -f "${inspection_error}"
+            printf '%s\n' "::notice::remote-operation:ghcr-inspect-final-tag:final-tag-absent" >&3
             # The immutable final tag is created only after scan, sign, attest, and verify all passed.
-            cosign copy "${image}@${digest}" "${image}:${publication_tag}"
+            run_remote "cosign-copy-final-tag" cosign copy "${image}@${digest}" "${image}:${publication_tag}"
             echo "Published ${image}:${publication_tag} at digest ${digest}."
           fi
 
