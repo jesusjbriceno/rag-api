@@ -13,8 +13,8 @@ public sealed class EmbeddingProfileTests
     [Fact]
     public void Rejects_latest_as_a_persisted_model_or_version()
     {
-        Assert.Throws<ArgumentException>(() => new EmbeddingProfile("ollama", "qwen3-embedding:latest", "0.6b", 1_024));
-        Assert.Throws<ArgumentException>(() => new EmbeddingProfile("ollama", "qwen3-embedding:0.6b", "latest", 1_024));
+        Assert.Throws<ArgumentException>(() => new EmbeddingProfile("llama.cpp", "model:latest", "1", 1_024));
+        Assert.Throws<ArgumentException>(() => new EmbeddingProfile("llama.cpp", "model:1", "latest", 1_024));
     }
 
     [Fact]
@@ -22,19 +22,20 @@ public sealed class EmbeddingProfileTests
     {
         var options = new EmbeddingOptions
         {
-            AllowedProfiles = [new EmbeddingProfileOptions { Provider = "ollama", Model = "other:1", Version = "1", Dimensions = 3 }],
+            AllowedProfiles = [new EmbeddingProfileOptions { Provider = "llama.cpp", Model = "other:1", Version = "1", Dimensions = 3 }],
         };
 
         Assert.Throws<InvalidOperationException>(options.Validate);
     }
 }
 
-public sealed class OllamaEmbeddingProviderTests
+public sealed class LlamaCppEmbeddingProviderTests
 {
     [Fact]
     public async Task Sends_an_openai_compatible_request_and_validates_the_ordered_response()
     {
         string? requestBody = null;
+        var profile = EmbeddingProfile.Default;
         var handler = new DelegateHandler(async request =>
         {
             Assert.Equal(HttpMethod.Post, request.Method);
@@ -44,30 +45,31 @@ public sealed class OllamaEmbeddingProviderTests
             {
                 data = new[]
                 {
-                    new { index = 0, embedding = new float[] { 1, 2, 3 } },
-                    new { index = 1, embedding = new float[] { 4, 5, 6 } },
+                    new { index = 0, embedding = Enumerable.Repeat(1f, profile.Dimensions).ToArray() },
+                    new { index = 1, embedding = Enumerable.Repeat(2f, profile.Dimensions).ToArray() },
                 },
             });
         });
-        var profile = new EmbeddingProfile("ollama", "test:1", "1", 3);
-        var provider = new OllamaEmbeddingProvider(
+        var provider = new LlamaCppEmbeddingProvider(
             new HttpClient(handler) { BaseAddress = new Uri("http://localhost/") },
             Options.Create(OptionsFor(profile)));
 
         var response = await provider.EmbedAsync(profile, ["first", "second"], CancellationToken.None);
 
-        Assert.Equal(new[] { 1f, 2f, 3f }, response.Vectors[0]);
-        Assert.Equal(new[] { 4f, 5f, 6f }, response.Vectors[1]);
+        Assert.Equal(profile.Dimensions, response.Vectors[0].Length);
+        Assert.All(response.Vectors[0], value => Assert.Equal(1f, value));
+        Assert.Equal(profile.Dimensions, response.Vectors[1].Length);
+        Assert.All(response.Vectors[1], value => Assert.Equal(2f, value));
         using var request = JsonDocument.Parse(requestBody!);
-        Assert.Equal("test:1", request.RootElement.GetProperty("model").GetString());
-        Assert.Equal(3, request.RootElement.GetProperty("dimensions").GetInt32());
+        Assert.Equal(profile.Model, request.RootElement.GetProperty("model").GetString());
+        Assert.Equal("float", request.RootElement.GetProperty("encoding_format").GetString());
         Assert.Equal("first", request.RootElement.GetProperty("input")[0].GetString());
     }
 
     [Fact]
     public async Task Rejects_response_with_missing_or_wrong_dimension_vectors()
     {
-        var profile = new EmbeddingProfile("ollama", "test:1", "1", 3);
+        var profile = EmbeddingProfile.Default;
         var handler = new DelegateHandler(_ => Task.FromResult(JsonResponse(new
         {
             data = new[]
@@ -77,7 +79,7 @@ public sealed class OllamaEmbeddingProviderTests
             },
         })));
         var client = new HttpClient(handler) { BaseAddress = new Uri("http://localhost/") };
-        var provider = new OllamaEmbeddingProvider(client, Options.Create(OptionsFor(profile)));
+        var provider = new LlamaCppEmbeddingProvider(client, Options.Create(OptionsFor(profile)));
 
         await Assert.ThrowsAsync<EmbeddingProviderException>(() => provider.EmbedAsync(profile, ["first", "second"], CancellationToken.None));
     }
@@ -85,13 +87,13 @@ public sealed class OllamaEmbeddingProviderTests
     [Fact]
     public async Task Rejects_response_with_a_vector_of_the_wrong_dimension()
     {
-        var profile = new EmbeddingProfile("ollama", "test:1", "1", 3);
+        var profile = EmbeddingProfile.Default;
         var handler = new DelegateHandler(_ => Task.FromResult(JsonResponse(new
         {
             data = new[] { new { index = 0, embedding = new float[] { 1, 2 } } },
         })));
         var client = new HttpClient(handler) { BaseAddress = new Uri("http://localhost/") };
-        var provider = new OllamaEmbeddingProvider(client, Options.Create(OptionsFor(profile)));
+        var provider = new LlamaCppEmbeddingProvider(client, Options.Create(OptionsFor(profile)));
 
         await Assert.ThrowsAsync<EmbeddingProviderException>(() => provider.EmbedAsync(profile, ["first"], CancellationToken.None));
     }
@@ -118,7 +120,7 @@ public sealed class QueryEmbeddingServiceTests
     [Fact]
     public async Task Uses_the_exact_profile_persisted_for_the_collection()
     {
-        var profile = new EmbeddingProfile("ollama", "custom:1", "1", 3);
+        var profile = new EmbeddingProfile("llama.cpp", "custom:1", "1", 3);
         var provider = new RecordingEmbeddingProvider();
         var service = new QueryEmbeddingService(new StaticCollectionProfiles(profile), provider);
 

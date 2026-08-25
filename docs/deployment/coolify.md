@@ -1,12 +1,12 @@
 # Deploy the private RAG stack with Coolify
 
-Deploy this Compose stack privately, then let approved client stacks reach only the API over Coolify's predefined network. PostgreSQL and Ollama remain stack-internal.
+Deploy this Compose stack privately, then let approved client stacks reach only the API over Coolify's predefined network. PostgreSQL and llama.cpp remain stack-internal.
 
 ## Quick path
 
 1. Create a Coolify **Service Stack** from this repository using `compose.coolify.yaml`.
 2. Add the required deployment secrets in Coolify and deploy without domains or port mappings.
-3. Wait for `migrate` and `model-pull` to complete successfully; the `api` service then starts and must become ready.
+3. Wait for `model-download` and `migrate` to complete successfully; llama.cpp and then the API start. The API must become ready.
 4. Enable **Connect to Predefined Network** on both the RAG and client service stacks. Put the Coolify-generated full API service hostname in the client stack's environment, for example `RAG_API_BASE_URL=http://rag-api-<resource-uuid>:8080`.
 
 Coolify creates an isolated network for each stack. Its predefined-network option makes cross-stack communication possible using generated full service names; do not add a Compose `networks` section to work around that isolation.
@@ -27,8 +27,6 @@ Set these values in Coolify's deployment environment. Do not commit them, add th
 | `JWT__VALIDATION_KEYS__0__KEY_ID` | Active RSA validation key identifier |
 | `JWT__VALIDATION_KEYS__0__PUBLIC_KEY_PEM` | Active RSA public PEM |
 
-`OLLAMA_MODEL` defaults to `qwen3-embedding:0.6b` in `.env.example`; keep it equal to the configured embedding model unless the application configuration changes in the same release.
-
 ### JWT key rotation
 
 1. Generate a new RSA key pair outside the repository.
@@ -39,32 +37,55 @@ Set these values in Coolify's deployment environment. Do not commit them, add th
 
 The application validates that the current private key matches a listed public key. PEM values are deployment-only secrets.
 
+## Embedding artifact provenance
+
+The service accepts only this profile:
+
+| Property | Value |
+| --- | --- |
+| Provider | `llama.cpp` |
+| Model | `hf://Qwen/Qwen3-Embedding-0.6B-GGUF@370f27d7550e0def9b39c1f16d3fbaa13aa67728/Qwen3-Embedding-0.6B-Q8_0.gguf` |
+| Source revision | `370f27d7550e0def9b39c1f16d3fbaa13aa67728` |
+| Exact bytes | `639150592` |
+| SHA-256 | `06507c7b42688469c4e7298b0a1e16deff06caf291cf0a5b278c308249c3e439` |
+| Dimensions | `1024` |
+
+`model-download` is the only acquisition step. It uses a pinned downloader image and fetches only the pinned HTTPS source, verifies size and SHA-256 before atomically publishing the GGUF, and atomically writes `/models/Qwen3-Embedding-0.6B-Q8_0.manifest`. The manifest records source URL, revision, filename, byte count, checksum, and download time.
+
+The `llama-cpp` service uses a pinned server image, mounts `/models` read-only, and runs `--offline --model /models/Qwen3-Embedding-0.6B-Q8_0.gguf --embedding --pooling last --embd-normalize 2 --device none`. It does not download models, use a GPU runtime, expose a public port, or provide a client-facing boundary.
+
+## Direct-cutover stop and later reindex
+
+This release is a direct, forward-only cutover for empty RAG data. Its migration stops when any row exists in `collections` or `chunk_embeddings`. The stop intentionally leaves all existing embedding profile fields and vectors untouched and reports that a clone-and-reindex release is required for existing Ollama data.
+
+Do not bypass the migration with direct SQL. A later release must provide a deliberate clone-and-reindex path: clone the source data into a separately profiled target, generate vectors with the target profile, validate retrieval, and only then switch clients. That work is not part of this release.
+
 ## Private cross-stack procedure
 
 1. Keep all RAG services without domains and without host-published ports. `compose.coolify.yaml` already enforces this.
 2. Deploy the RAG stack. Coolify gives the API service a generated full hostname such as `api-<resource-uuid>`; copy the actual name from Coolify rather than guessing it.
 3. In the RAG service stack settings, enable **Connect to Predefined Network**.
-4. In each approved client stack (n8n or another client), enable the same option.
+4. In each approved client stack, enable the same option.
 5. Set that client's API base URL to `http://<actual-full-api-service-name>:8080`, redeploy it, and authenticate with issued client credentials.
 
-Do not use `postgres` or `ollama` from client stacks. Those names resolve only inside the RAG stack and are intentionally not exposed as a client integration surface.
+Do not use `postgres` or `llama-cpp` from client stacks. Those names resolve only inside the RAG stack and are intentionally not exposed as a client integration surface.
 
 ## Startup and health semantics
 
 | Service | Gate | Meaning |
 | --- | --- | --- |
 | `postgres` | `pg_isready` | PostgreSQL accepts connections |
-| `ollama` | `ollama list` | Ollama server accepts local CLI requests |
-| `migrate` | `Rag.Operator migrate` | EF Core applies pending migrations idempotently |
-| `model-pull` | `ollama pull qwen3-embedding:0.6b` | Required model is present in persistent Ollama storage |
+| `model-download` | HTTPS download, byte count, SHA-256, atomic publication | The immutable model artifact and manifest are available |
+| `migrate` | `Rag.Operator migrate` | EF Core applies pending migrations idempotently or explicitly stops the cutover |
+| `llama-cpp` | Local verified GGUF | CPU-only embedding runtime starts offline |
 | `api` liveness | `/api/v1/health/live` | The API process is alive; no dependencies are checked |
-| `api` readiness | `/api/v1/health/ready` | PostgreSQL is reachable and Ollama lists the configured model |
+| `api` readiness | `/api/v1/health/ready` | PostgreSQL is reachable and llama.cpp `GET /health` returns a valid `200` ready response |
 
-Readiness calls Ollama `GET /api/tags`; it does not generate an embedding or load a model merely to report health. Both health routes are anonymous. Every collection, ingestion, operation, and retrieval route remains JWT-protected.
+Readiness treats llama.cpp `503` loading responses, transport failures, and malformed `200` responses as unhealthy. It does not generate an embedding or trigger model download. Both health routes are anonymous. Every collection, ingestion, operation, and retrieval route remains JWT-protected.
 
 ## Legacy ownership migration
 
-Fresh deployments need no intervention. A database containing collections from before service-client ownership may stop at the enforcement migration by design.
+Fresh deployments need no intervention. A database containing collections from before service-client ownership may stop at the ownership enforcement migration by design.
 
 1. Deploy an image containing the preparatory ownership migration, not the enforcement migration.
 2. Run `Rag.Operator issue <service-client-name>` and record the printed `ServiceClientId` with the generated credential.
@@ -74,15 +95,9 @@ Fresh deployments need no intervention. A database containing collections from b
 
 Assignments never create owners or reassign owned collections. Do not bypass the migration's deliberate stop with direct SQL.
 
-## CPU sizing and image pinning
-
-The initial host is a 96 GB Minisforum MS-A2 and runs Ollama on CPU only. `qwen3-embedding:0.6b` is intentionally small, but ingestion throughput is CPU-bound; measure queue age and CPU saturation before raising concurrency or choosing a larger model.
-
-The tracked image tags match this codebase's .NET 10 and pgvector/PostgreSQL 16 requirements. Before production deployment, resolve each image tag to an approved immutable digest in Coolify or the deployment registry. Update and review that pin as a normal release change. GPU/NVIDIA runtime is out of scope for this stack; any future GPU deployment must be introduced as a separate profile rather than changing this CPU baseline.
-
 ## Backup and recovery contract
 
-Hermes may schedule the repository script; it must provide a mounted content-volume directory and standard libpq connection variables. The script has no Docker, cloud, Dropbox, or destination-provider integration.
+An external scheduler may run the repository script; it must provide a mounted content-volume directory and standard libpq connection variables. The script has no Docker, cloud, Dropbox, or destination-provider integration.
 
 ```bash
 PGHOST=<postgres-host> PGPORT=5432 PGDATABASE=<database> PGUSER=<user> PGPASSWORD=<password> \
@@ -104,5 +119,6 @@ For recovery, stop writers, restore `postgres.dump` with `pg_restore` into a com
 - Public domains or host-published RAG service ports.
 - Custom Coolify Compose networks.
 - GPU/NVIDIA runtime configuration.
+- General-infrastructure model runtime or automation deployment.
 - Bulk retry or replay policy for failed ingestion operations.
 - Backup destinations, Dropbox integration, and provider credentials.

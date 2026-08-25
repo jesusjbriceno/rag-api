@@ -153,7 +153,7 @@ public sealed class ProtectedApiTests(PostgreSqlFixture fixture) : IAsyncLifetim
             .UseNpgsql(fixture.ConnectionString, options => options.UseVector())
             .Options;
         await using var context = new IngestionDbContext(options);
-        var collection = new Collection(Guid.NewGuid(), serviceClientId, "Other profile", DateTimeOffset.UtcNow, new EmbeddingProfile("ollama", "other:1", "1", 3));
+        var collection = new Collection(Guid.NewGuid(), serviceClientId, "Other profile", DateTimeOffset.UtcNow, new EmbeddingProfile("llama.cpp", "other:1", "1", 3));
         context.Collections.Add(collection);
         await context.SaveChangesAsync();
         return new CollectionResponse(collection.Id, collection.Name);
@@ -205,13 +205,13 @@ public sealed class ProtectedApiFactory(string connectionString, string contentR
         {
             ["ConnectionStrings:Rag"] = connectionString,
             ["ContentStore:RootPath"] = contentRoot,
-            ["Embeddings:Default:Provider"] = "ollama",
-            ["Embeddings:Default:Model"] = "qwen3-embedding:0.6b",
-            ["Embeddings:Default:Version"] = "0.6b",
+            ["Embeddings:Default:Provider"] = "llama.cpp",
+            ["Embeddings:Default:Model"] = "hf://Qwen/Qwen3-Embedding-0.6B-GGUF@370f27d7550e0def9b39c1f16d3fbaa13aa67728/Qwen3-Embedding-0.6B-Q8_0.gguf",
+            ["Embeddings:Default:Version"] = "sha256:06507c7b42688469c4e7298b0a1e16deff06caf291cf0a5b278c308249c3e439",
             ["Embeddings:Default:Dimensions"] = "1024",
-            ["Embeddings:AllowedProfiles:0:Provider"] = "ollama",
-            ["Embeddings:AllowedProfiles:0:Model"] = "qwen3-embedding:0.6b",
-            ["Embeddings:AllowedProfiles:0:Version"] = "0.6b",
+            ["Embeddings:AllowedProfiles:0:Provider"] = "llama.cpp",
+            ["Embeddings:AllowedProfiles:0:Model"] = "hf://Qwen/Qwen3-Embedding-0.6B-GGUF@370f27d7550e0def9b39c1f16d3fbaa13aa67728/Qwen3-Embedding-0.6B-Q8_0.gguf",
+            ["Embeddings:AllowedProfiles:0:Version"] = "sha256:06507c7b42688469c4e7298b0a1e16deff06caf291cf0a5b278c308249c3e439",
             ["Embeddings:AllowedProfiles:0:Dimensions"] = "1024",
             ["Jwt:Issuer"] = "integration-issuer",
             ["Jwt:Audience"] = "integration-audience",

@@ -16,16 +16,26 @@ services:
       start_period: 10s
     restart: unless-stopped
 
-  ollama:
-    image: ollama/ollama:0.12.3
+  model-download:
+    image: curlimages/curl@sha256:94e9e444bcba979c2ea12e27ae39bee4cd10bc7041a472c4727a558e213744e6
+    user: "0:0"
+    entrypoint: ["/bin/sh", "/scripts/download-llamacpp-model.sh"]
+    read_only: true
     volumes:
-      - ollama-data:/root/.ollama
-    healthcheck:
-      test: ["CMD", "ollama", "list"]
-      interval: 5s
-      timeout: 5s
-      retries: 20
-      start_period: 10s
+      - llama-cpp-model:/models
+      - ./scripts/download-llamacpp-model.sh:/scripts/download-llamacpp-model.sh:ro
+    restart: "no"
+
+  llama-cpp:
+    image: ghcr.io/ggml-org/llama.cpp@sha256:c005e79321f8e5731ec49a7f736aaeaac9465926c1e8f4c199c1d8a8996f26ef
+    command:
+      ["--model", "/models/Qwen3-Embedding-0.6B-Q8_0.gguf", "--embedding", "--pooling", "last", "--embd-normalize", "2", "--device", "none", "--offline", "--host", "0.0.0.0", "--port", "8080"]
+    read_only: true
+    volumes:
+      - llama-cpp-model:/models:ro
+    depends_on:
+      model-download:
+        condition: service_completed_successfully
     restart: unless-stopped
 
   migrate:
@@ -37,7 +47,7 @@ services:
     environment: &rag-environment
       ConnectionStrings__Rag: Host=postgres;Port=5432;Database=${POSTGRES_DB};Username=${POSTGRES_USER};Password=${POSTGRES_PASSWORD}
       ContentStore__RootPath: /app/content
-      Ollama__BaseUrl: http://ollama:11434/
+      LlamaCpp__BaseUrl: http://llama-cpp:8080/
       Jwt__Issuer: ${JWT__ISSUER}
       Jwt__Audience: ${JWT__AUDIENCE}
       Jwt__CurrentSigningKey__KeyId: ${JWT__CURRENT_SIGNING_KEY__KEY_ID}
@@ -46,20 +56,6 @@ services:
       Jwt__ValidationKeys__0__PublicKeyPem: ${JWT__VALIDATION_KEYS__0__PUBLIC_KEY_PEM}
     depends_on:
       postgres:
-        condition: service_healthy
-    restart: "no"
-
-  model-pull:
-    image: ollama/ollama:0.12.3
-    entrypoint: ["/bin/sh", "-ec"]
-    command: ["ollama pull \"$$OLLAMA_MODEL\""]
-    environment:
-      OLLAMA_HOST: http://ollama:11434
-      OLLAMA_MODEL: ${OLLAMA_MODEL}
-    volumes:
-      - ollama-data:/root/.ollama
-    depends_on:
-      ollama:
         condition: service_healthy
     restart: "no"
 
@@ -74,8 +70,8 @@ services:
     depends_on:
       migrate:
         condition: service_completed_successfully
-      model-pull:
-        condition: service_completed_successfully
+      llama-cpp:
+        condition: service_started
     healthcheck:
       test: ["CMD-SHELL", "curl --fail --silent --show-error http://127.0.0.1:8080/api/v1/health/ready"]
       interval: 10s
@@ -86,5 +82,5 @@ services:
 
 volumes:
   postgres-data:
-  ollama-data:
+  llama-cpp-model:
   rag-content:

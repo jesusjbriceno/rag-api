@@ -1,8 +1,6 @@
 using System.Net.Http.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
-using Microsoft.Extensions.Options;
-using Rag.Application;
 
 namespace Rag.Infrastructure;
 
@@ -24,31 +22,31 @@ public sealed class PostgreSqlReadinessHealthCheck(IDbContextFactory<IngestionDb
     }
 }
 
-public sealed class OllamaModelReadinessHealthCheck(HttpClient httpClient, IOptions<EmbeddingOptions> embeddingOptions) : IHealthCheck
+public sealed class LlamaCppReadinessHealthCheck(HttpClient httpClient) : IHealthCheck
 {
     public async Task<HealthCheckResult> CheckHealthAsync(HealthCheckContext context, CancellationToken cancellationToken = default)
     {
-        var model = embeddingOptions.Value.Validate().DefaultProfile.Model;
         try
         {
-            var response = await httpClient.GetFromJsonAsync<OllamaTagsResponse>("api/tags", cancellationToken);
-            return response?.Models?.Any(candidate => string.Equals(candidate.Name, model, StringComparison.Ordinal)) is true
+            using var response = await httpClient.GetAsync("health", cancellationToken);
+            if (response.StatusCode != System.Net.HttpStatusCode.OK)
+            {
+                return HealthCheckResult.Unhealthy("llama.cpp is not ready.");
+            }
+
+            var payload = await response.Content.ReadFromJsonAsync<LlamaCppHealthResponse>(cancellationToken: cancellationToken);
+            return string.Equals(payload?.Status, "ok", StringComparison.OrdinalIgnoreCase)
                 ? HealthCheckResult.Healthy()
-                : HealthCheckResult.Unhealthy($"Configured Ollama model '{model}' is unavailable.");
+                : HealthCheckResult.Unhealthy("llama.cpp returned a malformed health response.");
         }
         catch (Exception exception) when (exception is HttpRequestException or NotSupportedException or System.Text.Json.JsonException)
         {
-            return HealthCheckResult.Unhealthy("Ollama is unavailable.", exception);
+            return HealthCheckResult.Unhealthy("llama.cpp is unavailable.", exception);
         }
     }
 
-    private sealed class OllamaTagsResponse
+    private sealed class LlamaCppHealthResponse
     {
-        public List<OllamaModel>? Models { get; init; }
-    }
-
-    private sealed class OllamaModel
-    {
-        public string? Name { get; init; }
+        public string? Status { get; init; }
     }
 }

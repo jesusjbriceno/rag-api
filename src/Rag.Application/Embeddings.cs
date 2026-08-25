@@ -40,9 +40,9 @@ public sealed class EmbeddingOptions
             throw new InvalidOperationException("Embeddings:AllowedProfiles must contain at least one profile.");
         }
 
-        if (allowedProfiles.Any(profile => !string.Equals(profile.Provider, "ollama", StringComparison.Ordinal)))
+        if (defaultProfile != EmbeddingProfile.Default || allowedProfiles.Length != 1 || allowedProfiles[0] != EmbeddingProfile.Default)
         {
-            throw new InvalidOperationException("Only the ollama embedding provider is currently supported.");
+            throw new InvalidOperationException("This build supports only the configured llama.cpp embedding profile.");
         }
 
         if (allowedProfiles.Distinct().Count() != allowedProfiles.Length)

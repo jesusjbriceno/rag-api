@@ -32,9 +32,9 @@ public static class InfrastructureServiceCollectionExtensions
             .Bind(configuration.GetSection(EmbeddingOptions.SectionName))
             .Validate(options => TryValidateEmbeddingOptions(options, out _), "Embedding profiles are invalid.")
             .ValidateOnStart();
-        services.AddOptions<OllamaOptions>()
-            .Bind(configuration.GetSection(OllamaOptions.SectionName))
-            .Validate(options => Uri.TryCreate(options.BaseUrl, UriKind.Absolute, out _), "Ollama:BaseUrl must be an absolute URL.")
+        services.AddOptions<LlamaCppOptions>()
+            .Bind(configuration.GetSection(LlamaCppOptions.SectionName))
+            .Validate(options => Uri.TryCreate(options.BaseUrl, UriKind.Absolute, out _), "LlamaCpp:BaseUrl must be an absolute URL.")
             .ValidateOnStart();
         services.AddOptions<OperationWorkerOptions>()
             .Bind(configuration.GetSection(OperationWorkerOptions.SectionName))
@@ -68,19 +68,19 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddSingleton<ICredentialGenerator, CredentialGenerator>();
         services.AddSingleton<ICredentialSecretHasher, Argon2idCredentialSecretHasher>();
         services.AddSingleton<IAccessTokenIssuer, JwtAccessTokenIssuer>();
-        services.AddHttpClient<IEmbeddingProvider, OllamaEmbeddingProvider>((serviceProvider, client) =>
+        services.AddHttpClient<IEmbeddingProvider, LlamaCppEmbeddingProvider>((serviceProvider, client) =>
         {
-            var ollama = serviceProvider.GetRequiredService<IOptions<OllamaOptions>>().Value;
-            client.BaseAddress = new Uri(ollama.BaseUrl, UriKind.Absolute);
+            var llamaCpp = serviceProvider.GetRequiredService<IOptions<LlamaCppOptions>>().Value;
+            client.BaseAddress = new Uri(llamaCpp.BaseUrl, UriKind.Absolute);
         });
-        services.AddHttpClient<OllamaModelReadinessHealthCheck>((serviceProvider, client) =>
+        services.AddHttpClient<LlamaCppReadinessHealthCheck>((serviceProvider, client) =>
         {
-            var ollama = serviceProvider.GetRequiredService<IOptions<OllamaOptions>>().Value;
-            client.BaseAddress = new Uri(ollama.BaseUrl, UriKind.Absolute);
+            var llamaCpp = serviceProvider.GetRequiredService<IOptions<LlamaCppOptions>>().Value;
+            client.BaseAddress = new Uri(llamaCpp.BaseUrl, UriKind.Absolute);
         });
         services.AddHealthChecks()
             .AddCheck<PostgreSqlReadinessHealthCheck>("postgresql", tags: ["ready"])
-            .AddCheck<OllamaModelReadinessHealthCheck>("ollama-model", tags: ["ready"]);
+            .AddCheck<LlamaCppReadinessHealthCheck>("llama-cpp", tags: ["ready"]);
         services.AddSingleton<TxtChunker>();
         services.AddSingleton<IOperationProcessor, TxtOperationProcessor>();
         services.AddHostedService<OperationWorker>();

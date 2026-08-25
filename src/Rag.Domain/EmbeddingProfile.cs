@@ -2,7 +2,11 @@ namespace Rag.Domain;
 
 public sealed record EmbeddingProfile
 {
-    public static readonly EmbeddingProfile Default = new("ollama", "qwen3-embedding:0.6b", "0.6b", 1_024);
+    public static readonly EmbeddingProfile Default = new(
+        "llama.cpp",
+        "hf://Qwen/Qwen3-Embedding-0.6B-GGUF@370f27d7550e0def9b39c1f16d3fbaa13aa67728/Qwen3-Embedding-0.6B-Q8_0.gguf",
+        "sha256:06507c7b42688469c4e7298b0a1e16deff06caf291cf0a5b278c308249c3e439",
+        1_024);
 
     public EmbeddingProfile(string provider, string model, string version, int dimensions)
     {

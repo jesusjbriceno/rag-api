@@ -46,13 +46,13 @@ public sealed class AuthApiFactory : WebApplicationFactory<global::Program>
     {
         builder.ConfigureAppConfiguration((_, configuration) => configuration.AddInMemoryCollection(new Dictionary<string, string?>
         {
-            ["Embeddings:Default:Provider"] = "ollama",
-            ["Embeddings:Default:Model"] = "qwen3-embedding:0.6b",
-            ["Embeddings:Default:Version"] = "0.6b",
+            ["Embeddings:Default:Provider"] = "llama.cpp",
+            ["Embeddings:Default:Model"] = "hf://Qwen/Qwen3-Embedding-0.6B-GGUF@370f27d7550e0def9b39c1f16d3fbaa13aa67728/Qwen3-Embedding-0.6B-Q8_0.gguf",
+            ["Embeddings:Default:Version"] = "sha256:06507c7b42688469c4e7298b0a1e16deff06caf291cf0a5b278c308249c3e439",
             ["Embeddings:Default:Dimensions"] = "1024",
-            ["Embeddings:AllowedProfiles:0:Provider"] = "ollama",
-            ["Embeddings:AllowedProfiles:0:Model"] = "qwen3-embedding:0.6b",
-            ["Embeddings:AllowedProfiles:0:Version"] = "0.6b",
+            ["Embeddings:AllowedProfiles:0:Provider"] = "llama.cpp",
+            ["Embeddings:AllowedProfiles:0:Model"] = "hf://Qwen/Qwen3-Embedding-0.6B-GGUF@370f27d7550e0def9b39c1f16d3fbaa13aa67728/Qwen3-Embedding-0.6B-Q8_0.gguf",
+            ["Embeddings:AllowedProfiles:0:Version"] = "sha256:06507c7b42688469c4e7298b0a1e16deff06caf291cf0a5b278c308249c3e439",
             ["Embeddings:AllowedProfiles:0:Dimensions"] = "1024",
             ["Jwt:Issuer"] = "integration-issuer",
             ["Jwt:Audience"] = "integration-audience",

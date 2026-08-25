@@ -1,60 +1,50 @@
 using System.Net;
 using System.Text;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
-using Microsoft.Extensions.Options;
 using Rag.Application;
 using Rag.Infrastructure;
 
 namespace Rag.UnitTests;
 
-public sealed class OllamaModelReadinessHealthCheckTests
+public sealed class LlamaCppReadinessHealthCheckTests
 {
     [Fact]
-    public async Task Reports_healthy_when_the_configured_model_is_listed_without_generating_an_embedding()
+    public async Task Reports_healthy_from_the_health_endpoint_without_generating_an_embedding()
     {
-        using var handler = new RecordingHandler(HttpStatusCode.OK, "{\"models\":[{\"name\":\"qwen3-embedding:0.6b\"}]}");
-        using var client = new HttpClient(handler) { BaseAddress = new Uri("http://ollama/") };
-        var check = new OllamaModelReadinessHealthCheck(client, Options.Create(CreateOptions()));
+        using var handler = new RecordingHandler(HttpStatusCode.OK, "{\"status\":\"ok\"}");
+        using var client = new HttpClient(handler) { BaseAddress = new Uri("http://llama-cpp/") };
+        var check = new LlamaCppReadinessHealthCheck(client);
 
         var result = await check.CheckHealthAsync(new HealthCheckContext());
 
         Assert.Equal(HealthStatus.Healthy, result.Status);
         Assert.Equal(HttpMethod.Get, handler.Method);
-        Assert.Equal("/api/tags", handler.Path);
+        Assert.Equal("/health", handler.Path);
     }
 
     [Fact]
-    public async Task Reports_unhealthy_when_the_configured_model_is_not_listed()
+    public async Task Reports_unhealthy_while_llama_cpp_is_loading()
     {
-        using var handler = new RecordingHandler(HttpStatusCode.OK, "{\"models\":[]}");
-        using var client = new HttpClient(handler) { BaseAddress = new Uri("http://ollama/") };
-        var check = new OllamaModelReadinessHealthCheck(client, Options.Create(CreateOptions()));
+        using var handler = new RecordingHandler(HttpStatusCode.ServiceUnavailable, "{\"error\":{\"message\":\"loading\"}}");
+        using var client = new HttpClient(handler) { BaseAddress = new Uri("http://llama-cpp/") };
+        var check = new LlamaCppReadinessHealthCheck(client);
 
         var result = await check.CheckHealthAsync(new HealthCheckContext());
 
         Assert.Equal(HealthStatus.Unhealthy, result.Status);
     }
 
-    private static EmbeddingOptions CreateOptions() => new()
+    [Fact]
+    public async Task Reports_unhealthy_for_a_malformed_health_response()
     {
-        Default = new EmbeddingProfileOptions
-        {
-            Provider = "ollama",
-            Model = "qwen3-embedding:0.6b",
-            Version = "0.6b",
-            Dimensions = 1024,
-        },
-        AllowedProfiles =
-        [
-            new EmbeddingProfileOptions
-            {
-                Provider = "ollama",
-                Model = "qwen3-embedding:0.6b",
-                Version = "0.6b",
-                Dimensions = 1024,
-            },
-        ],
-    };
+        using var handler = new RecordingHandler(HttpStatusCode.OK, "not json");
+        using var client = new HttpClient(handler) { BaseAddress = new Uri("http://llama-cpp/") };
+        var check = new LlamaCppReadinessHealthCheck(client);
+
+        var result = await check.CheckHealthAsync(new HealthCheckContext());
+
+        Assert.Equal(HealthStatus.Unhealthy, result.Status);
+    }
 
     private sealed class RecordingHandler(HttpStatusCode statusCode, string payload) : HttpMessageHandler
     {

@@ -48,7 +48,7 @@ public sealed class SemanticRetrievalHandlerTests
         {
             Profiles =
             {
-                [firstCollectionId] = new EmbeddingProfile("ollama", "test:1", "1", 3),
+                [firstCollectionId] = new EmbeddingProfile("llama.cpp", "test:1", "1", 3),
             },
         };
         var provider = new RecordingEmbeddingProvider();
@@ -72,8 +72,8 @@ public sealed class SemanticRetrievalHandlerTests
         {
             Profiles =
             {
-                [firstCollectionId] = new EmbeddingProfile("ollama", "test:1", "1", 3),
-                [secondCollectionId] = new EmbeddingProfile("ollama", "test:2", "2", 3),
+                [firstCollectionId] = new EmbeddingProfile("llama.cpp", "test:1", "1", 3),
+                [secondCollectionId] = new EmbeddingProfile("llama.cpp", "test:2", "2", 3),
             },
         };
         var provider = new RecordingEmbeddingProvider();
@@ -93,7 +93,7 @@ public sealed class SemanticRetrievalHandlerTests
     {
         var firstCollectionId = Guid.NewGuid();
         var secondCollectionId = Guid.NewGuid();
-        var profile = new EmbeddingProfile("ollama", "test:1", "1", 3);
+        var profile = new EmbeddingProfile("llama.cpp", "test:1", "1", 3);
         var profiles = new RecordingProfiles
         {
             Profiles =
@@ -123,7 +123,7 @@ public sealed class SemanticRetrievalHandlerTests
     {
         var firstCollectionId = Guid.NewGuid();
         var secondCollectionId = Guid.NewGuid();
-        var profile = new EmbeddingProfile("ollama", "test:1", "1", 3);
+        var profile = new EmbeddingProfile("llama.cpp", "test:1", "1", 3);
         var profiles = new SingleAccessProfiles(firstCollectionId, secondCollectionId, profile);
         var provider = new RecordingEmbeddingProvider();
         var repository = new RecordingRepository();

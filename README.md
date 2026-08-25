@@ -1,12 +1,12 @@
 # Private RAG API delivery
 
-This repository deploys the RAG API, PostgreSQL with pgvector, Ollama, database migration, and model pull as one private Coolify Compose stack. The API has no public domain or published production port.
+This repository deploys the RAG API, PostgreSQL with pgvector, a private CPU-only llama.cpp embedding runtime, database migration, and verified model download as one private Coolify Compose stack. The API has no public domain or published production port.
 
 ## Quick path
 
 1. In Coolify, create a **Service Stack** from this repository and select `compose.coolify.yaml`.
 2. Add the deployment secrets listed in [Coolify delivery](docs/deployment/coolify.md#secret-inventory); never upload this repository's `.env.example` as production configuration.
-3. Deploy. Coolify starts PostgreSQL and Ollama, completes the idempotent migration and model-pull jobs, then starts the API.
+3. Deploy. Coolify starts PostgreSQL, downloads and verifies the immutable Qwen GGUF, applies the idempotent migration, then starts llama.cpp and the API.
 4. From a separate client stack, use Coolify's generated full API hostname on its predefined network. Do not create a domain or publish a port for this stack.
 
 For local-only access, copy `.env.example` to `.env` with disposable values and run:
@@ -16,6 +16,23 @@ docker compose --env-file .env -f compose.coolify.yaml -f compose.dev.yaml up --
 ```
 
 The API is then loopback-only at `http://127.0.0.1:8080`. The placeholder JWT values intentionally prevent real API startup until valid deployment-only key material is supplied.
+
+## Embedding runtime
+
+The direct-cutover profile is fixed for this build. There is no Ollama compatibility profile or fallback.
+
+| Property | Value |
+| --- | --- |
+| Provider | `llama.cpp` |
+| Model | `hf://Qwen/Qwen3-Embedding-0.6B-GGUF@370f27d7550e0def9b39c1f16d3fbaa13aa67728/Qwen3-Embedding-0.6B-Q8_0.gguf` |
+| Artifact SHA-256 | `06507c7b42688469c4e7298b0a1e16deff06caf291cf0a5b278c308249c3e439` |
+| Dimensions | `1024` |
+
+The one-shot downloader fetches the pinned HTTPS artifact, verifies `639150592` bytes and its SHA-256, atomically publishes the GGUF, and writes a provenance manifest. llama.cpp mounts that storage read-only and starts offline with local `--model`, `--embedding`, `--pooling last`, `--embd-normalize 2`, and `--device none` options.
+
+## Direct-cutover stop
+
+This is a forward-only empty-data cutover. The migration stops before the runtime change if **any collection or chunk embedding exists**. It does not rewrite embedding profile fields or vectors. Existing Ollama data requires a later, explicit clone-and-reindex release; do not bypass this stop with direct SQL.
 
 ## Operational entry points
 
@@ -51,23 +68,19 @@ Rotate keys by first deploying the new public validation key alongside the old o
 3. Copy Coolify's generated full API service name, such as `api-<resource-uuid>`.
 4. Configure the client with `RAG_API_BASE_URL=http://<actual-full-api-service-name>:8080` and redeploy it.
 
-This is the only cross-stack path. PostgreSQL and Ollama remain internal; do not target them from n8n or another client stack.
-
-### Legacy collection ownership
-
-For a database that predates collection ownership: deploy the preparatory migration, run `Rag.Operator issue <service-client-name>`, keep its printed `ServiceClientId`, list unowned collections, assign each deliberately, then rerun `Rag.Operator migrate` with enforcement enabled. The full command sequence is in the [legacy ownership migration](docs/deployment/coolify.md#legacy-ownership-migration) runbook.
+This is the only cross-stack path. PostgreSQL and llama.cpp remain internal; do not target them from n8n or another client stack.
 
 ### Health and recovery
 
-`/live` checks only whether the API process runs. `/ready` additionally checks PostgreSQL connectivity and that Ollama lists the configured model through `GET /api/tags`; it never creates an embedding as a health-check side effect.
+`/live` checks only whether the API process runs. `/ready` additionally checks PostgreSQL connectivity and llama.cpp `GET /health`. `200` with a valid ready payload is healthy; `503`, transport failures, and malformed responses are unhealthy. Readiness never generates an embedding.
 
-Hermes can schedule `scripts/backup-rag.sh`, but the scheduler owns retention, destination transfer, alerting, and restore exercises. Recovery restores the PostgreSQL custom dump and the content tar into compatible, mounted storage before reopening writers. See [backup and recovery](docs/deployment/coolify.md#backup-and-recovery-contract).
+An external scheduler can run `scripts/backup-rag.sh`, but the scheduler owns retention, destination transfer, alerting, and restore exercises. Recovery restores the PostgreSQL custom dump and the content tar into compatible, mounted storage before reopening writers. See [backup and recovery](docs/deployment/coolify.md#backup-and-recovery-contract).
 
 ## Delivery boundaries
 
 - Production Compose intentionally has no `ports`, `domains`, or custom `networks` declarations.
-- PostgreSQL and Ollama are internal stack dependencies; external client stacks receive access only to the API when connected through Coolify's predefined network.
-- The initial target is CPU-only Ollama with `qwen3-embedding:0.6b` on a 96 GB Minisforum MS-A2. Expect ingestion throughput to be CPU-bound and measure queue age before increasing concurrency.
-- GPU/NVIDIA runtime, bulk retry or replay policy, and backup destinations are explicitly out of scope. A future GPU deployment must use a separate profile rather than altering this CPU stack.
+- PostgreSQL and llama.cpp are internal stack dependencies; external client stacks receive access only to the API when connected through Coolify's predefined network.
+- The runtime is CPU-only and uses a locally mounted, verified GGUF. GPU/NVIDIA runtime configuration is not part of this stack.
+- General-infrastructure model runtimes and automation remain outside this RAG delivery boundary.
 
 Read the [Coolify delivery guide](docs/deployment/coolify.md) before the first deployment or recovery.

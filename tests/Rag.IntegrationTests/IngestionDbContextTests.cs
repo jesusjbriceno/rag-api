@@ -33,6 +33,16 @@ public sealed class IngestionDbContextTests(PostgreSqlFixture fixture)
 
         var safetyCheck = Assert.IsType<SqlOperation>(enforcementBuilder.Operations.Single(operation => operation is SqlOperation sql && sql.Sql.Contains("Collection ownership enforcement is blocked", StringComparison.Ordinal)));
         Assert.Contains("\"ServiceClientId\" IS NULL", safetyCheck.Sql, StringComparison.Ordinal);
+
+        var cutover = new BlockDirectLlamaCppCutover();
+        var cutoverBuilder = new MigrationBuilder("Npgsql.EntityFrameworkCore.PostgreSQL");
+        typeof(BlockDirectLlamaCppCutover).GetMethod("Up", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            .Invoke(cutover, [cutoverBuilder]);
+
+        var cutoverCheck = Assert.IsType<SqlOperation>(Assert.Single(cutoverBuilder.Operations));
+        Assert.Contains("FROM collections", cutoverCheck.Sql, StringComparison.Ordinal);
+        Assert.Contains("FROM chunk_embeddings", cutoverCheck.Sql, StringComparison.Ordinal);
+        Assert.Contains("clone-and-reindex release", cutoverCheck.Sql, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -82,6 +92,9 @@ public sealed class IngestionDbContextTests(PostgreSqlFixture fixture)
             .Where(collection => collection.Id == legacyCollectionId)
             .Select(collection => collection.ServiceClientId)
             .SingleAsync());
+
+        await context.Database.ExecuteSqlRawAsync("TRUNCATE TABLE client_credentials, service_clients, operations, chunk_embeddings, chunks, document_versions, documents, collections CASCADE;");
+        await context.Database.MigrateAsync();
     }
 
     [Fact]
@@ -100,6 +113,56 @@ public sealed class IngestionDbContextTests(PostgreSqlFixture fixture)
 
         Assert.Contains("20260824150000_AddCollectionOwnership", await context.Database.GetAppliedMigrationsAsync());
         Assert.Contains("20260824150100_EnforceCollectionOwnership", await context.Database.GetAppliedMigrationsAsync());
+    }
+
+    [Fact]
+    public async Task PostgreSql_blocks_direct_llama_cpp_cutover_without_rewriting_existing_ollama_data()
+    {
+        var databaseName = $"cutover_{Guid.NewGuid():N}";
+        await using (var admin = new NpgsqlConnection(fixture.ConnectionString))
+        {
+            await admin.OpenAsync();
+            await using var createDatabase = new NpgsqlCommand($"CREATE DATABASE \"{databaseName}\";", admin);
+            await createDatabase.ExecuteNonQueryAsync();
+        }
+
+        try
+        {
+            var connectionString = new NpgsqlConnectionStringBuilder(fixture.ConnectionString) { Database = databaseName }.ConnectionString;
+            var options = new DbContextOptionsBuilder<IngestionDbContext>()
+                .UseNpgsql(connectionString, options => options.UseVector())
+                .Options;
+            await using var context = new IngestionDbContext(options);
+            var migrator = context.GetService<IMigrator>();
+
+            await migrator.MigrateAsync("20260824150100_EnforceCollectionOwnership");
+            var owner = new ServiceClient(Guid.NewGuid(), "cutover-owner", DateTimeOffset.UtcNow);
+            context.ServiceClients.Add(owner);
+            await context.SaveChangesAsync();
+
+            var collectionId = Guid.NewGuid();
+            await context.Database.ExecuteSqlInterpolatedAsync(
+                $"""
+                INSERT INTO collections ("Id", "ServiceClientId", "Name", "CreatedAt", "EmbeddingProvider", "EmbeddingModel", "EmbeddingVersion", "EmbeddingDimensions")
+                VALUES ({collectionId}, {owner.Id}, {"Legacy Ollama collection"}, {DateTimeOffset.UtcNow}, {"ollama"}, {"qwen3-embedding:0.6b"}, {"0.6b"}, {1_024});
+                """);
+
+            var exception = await Assert.ThrowsAsync<PostgresException>(() => context.Database.MigrateAsync());
+
+            Assert.Contains("clone-and-reindex release", exception.Message, StringComparison.Ordinal);
+            Assert.Equal("ollama", await context.Collections.AsNoTracking()
+                .Where(collection => collection.Id == collectionId)
+                .Select(collection => collection.EmbeddingProvider)
+                .SingleAsync());
+            Assert.DoesNotContain("20260825090000_BlockDirectLlamaCppCutover", await context.Database.GetAppliedMigrationsAsync());
+        }
+        finally
+        {
+            await using var admin = new NpgsqlConnection(fixture.ConnectionString);
+            await admin.OpenAsync();
+            await using var dropDatabase = new NpgsqlCommand($"DROP DATABASE IF EXISTS \"{databaseName}\" WITH (FORCE);", admin);
+            await dropDatabase.ExecuteNonQueryAsync();
+        }
     }
 
     [Fact]

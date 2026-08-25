@@ -14,7 +14,7 @@ public sealed class PostgresSemanticRetrievalRepositoryTests(PostgreSqlFixture f
     {
         var options = CreateOptions();
         await ResetDatabaseAsync(options);
-        var profile = new EmbeddingProfile("ollama", "test:1", "1", 3);
+        var profile = new EmbeddingProfile("llama.cpp", "test:1", "1", 3);
         var requestedCollectionId = new Guid("00000000-0000-0000-0000-000000000010");
         var otherCollectionId = new Guid("00000000-0000-0000-0000-000000000020");
         var documentId = new Guid("00000000-0000-0000-0000-000000000100");
@@ -102,7 +102,7 @@ public sealed class PostgresSemanticRetrievalRepositoryTests(PostgreSqlFixture f
                 collectionId,
                 "Empty collection",
                 DateTimeOffset.UtcNow,
-                new EmbeddingProfile("ollama", "test:1", "1", 3)));
+                new EmbeddingProfile("llama.cpp", "test:1", "1", 3)));
             await context.SaveChangesAsync();
         }
 

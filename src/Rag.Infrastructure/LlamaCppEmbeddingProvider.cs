@@ -1,21 +1,22 @@
 using System.Net.Http.Json;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Microsoft.Extensions.Options;
 using Rag.Application;
 using Rag.Domain;
 
 namespace Rag.Infrastructure;
 
-public sealed class OllamaOptions
+public sealed class LlamaCppOptions
 {
-    public const string SectionName = "Ollama";
+    public const string SectionName = "LlamaCpp";
 
-    public string BaseUrl { get; set; } = "http://localhost:11434/";
+    public string BaseUrl { get; set; } = "http://localhost:8080/";
 }
 
 public sealed class EmbeddingProviderException(string message, Exception? innerException = null) : Exception(message, innerException);
 
-public sealed class OllamaEmbeddingProvider(HttpClient httpClient, IOptions<EmbeddingOptions> options) : IEmbeddingProvider
+public sealed class LlamaCppEmbeddingProvider(HttpClient httpClient, IOptions<EmbeddingOptions> options) : IEmbeddingProvider
 {
     public async Task<EmbeddingResponse> EmbedAsync(
         EmbeddingProfile profile,
@@ -30,7 +31,7 @@ public sealed class OllamaEmbeddingProvider(HttpClient httpClient, IOptions<Embe
         }
 
         var configuredProfiles = GetValidatedProfiles();
-        if (profile.Provider != "ollama" || !configuredProfiles.AllowedProfiles.Contains(profile))
+        if (profile != EmbeddingProfile.Default || !configuredProfiles.AllowedProfiles.Contains(profile))
         {
             throw new EmbeddingProviderException("The collection embedding profile is not allowed by the current configuration.");
         }
@@ -39,10 +40,10 @@ public sealed class OllamaEmbeddingProvider(HttpClient httpClient, IOptions<Embe
         {
             using var response = await httpClient.PostAsJsonAsync(
                 "v1/embeddings",
-                new OllamaEmbeddingRequest(profile.Model, inputs, profile.Dimensions),
+                new LlamaCppEmbeddingRequest(profile.Model, inputs),
                 cancellationToken);
             response.EnsureSuccessStatusCode();
-            var payload = await response.Content.ReadFromJsonAsync<OllamaEmbeddingResponse>(cancellationToken: cancellationToken)
+            var payload = await response.Content.ReadFromJsonAsync<LlamaCppEmbeddingResponse>(cancellationToken: cancellationToken)
                 ?? throw new EmbeddingProviderException("The embedding provider returned an empty response.");
             return new EmbeddingResponse(ValidateResponse(payload, profile, inputs.Count));
         }
@@ -68,7 +69,7 @@ public sealed class OllamaEmbeddingProvider(HttpClient httpClient, IOptions<Embe
         }
     }
 
-    private static IReadOnlyList<float[]> ValidateResponse(OllamaEmbeddingResponse payload, EmbeddingProfile profile, int expectedCount)
+    private static IReadOnlyList<float[]> ValidateResponse(LlamaCppEmbeddingResponse payload, EmbeddingProfile profile, int expectedCount)
     {
         if (payload.Data is null || payload.Data.Count != expectedCount)
         {
@@ -100,14 +101,17 @@ public sealed class OllamaEmbeddingProvider(HttpClient httpClient, IOptions<Embe
         return vectors!;
     }
 
-    private sealed record OllamaEmbeddingRequest(string Model, IReadOnlyList<string> Input, int Dimensions);
+    private sealed record LlamaCppEmbeddingRequest(
+        string Model,
+        IReadOnlyList<string> Input,
+        [property: JsonPropertyName("encoding_format")] string EncodingFormat = "float");
 
-    private sealed class OllamaEmbeddingResponse
+    private sealed class LlamaCppEmbeddingResponse
     {
-        public List<OllamaEmbeddingData>? Data { get; init; }
+        public List<LlamaCppEmbeddingData>? Data { get; init; }
     }
 
-    private sealed class OllamaEmbeddingData
+    private sealed class LlamaCppEmbeddingData
     {
         public int Index { get; init; }
 
