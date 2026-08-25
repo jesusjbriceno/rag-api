@@ -53,4 +53,4 @@ jobs:
           curl -fsSL "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz" \
             -o "${RUNNER_TEMP}/actionlint.tar.gz"
           tar -xzf "${RUNNER_TEMP}/actionlint.tar.gz" -C "${RUNNER_TEMP}" actionlint
-          "${RUNNER_TEMP}/actionlint" .github/workflows
+          "${RUNNER_TEMP}/actionlint" .github/workflows/*.yml
