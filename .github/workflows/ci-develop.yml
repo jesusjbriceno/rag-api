@@ -212,35 +212,30 @@ jobs:
           provenance="${RUNNER_TEMP}/provenance.json"
           cat > "${provenance}" <<EOF
           {
-            "_type": "https://in-toto.io/Statement/v1",
-            "subject": [
-              {
-                "name": "${image}",
-                "digest": { "sha256": "${digest#sha256:}" }
-              }
-            ],
-            "predicateType": "https://slsa.dev/provenance/v1",
-            "predicate": {
-              "buildDefinition": {
-                "buildType": "https://github.com/jesusjbriceno/rag-api/.github/workflows/ci-develop.yml@refs/heads/develop",
-                "externalParameters": {
-                  "source": {
-                    "uri": "git+https://github.com/jesusjbriceno/rag-api@refs/heads/develop",
-                    "digest": { "sha1": "${GITHUB_SHA}" }
-                  }
+            "buildDefinition": {
+              "buildType": "https://github.com/jesusjbriceno/rag-api/.github/workflows/ci-develop.yml@refs/heads/develop",
+              "externalParameters": {
+                "source": {
+                  "uri": "git+https://github.com/jesusjbriceno/rag-api@refs/heads/develop",
+                  "digest": { "sha1": "${GITHUB_SHA}" }
                 }
               },
-              "runDetails": {
-                "builder": {
-                  "id": "https://github.com/jesusjbriceno/rag-api/.github/workflows/ci-develop.yml@refs/heads/develop"
-                },
-                "metadata": {
-                  "invocationId": "https://github.com/jesusjbriceno/rag-api/actions/runs/${GITHUB_RUN_ID}"
-                }
+            "runDetails": {
+              "builder": {
+                "id": "https://github.com/jesusjbriceno/rag-api/.github/workflows/ci-develop.yml@refs/heads/develop"
+              },
+              "metadata": {
+                "invocationId": "https://github.com/jesusjbriceno/rag-api/actions/runs/${GITHUB_RUN_ID}"
               }
             }
           }
           EOF
+          jq -e '
+            type == "object"
+            and (keys | sort == ["buildDefinition", "runDetails"])
+            and (.buildDefinition | type == "object" and has("buildType") and has("externalParameters"))
+            and (.runDetails | type == "object" and has("builder") and has("metadata"))
+          ' "${provenance}" >/dev/null
           cosign attest --yes \
             --type slsaprovenance1 \
             --predicate "${provenance}" \
