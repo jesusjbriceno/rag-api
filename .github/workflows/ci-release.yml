@@ -1,0 +1,316 @@
+name: ci-release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Build and test release candidate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@eef61447b9ff4aafe5dcd4e0bbf5d482be7e7871 # v4.2.1
+        with:
+          persist-credentials: false
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
+        with:
+          global-json-file: global.json
+
+      - name: Restore
+        run: dotnet restore Rag.sln
+
+      - name: Build
+        run: dotnet build Rag.sln --configuration Release --no-restore
+
+      - name: Test
+        run: dotnet test Rag.sln --configuration Release --no-build
+
+  package:
+    name: Build, scan, sign, publish (${{ matrix.component }})
+    needs:
+      - validate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write # push and tag container images on GHCR
+      id-token: write # mint OIDC token for keyless cosign signing
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - component: api
+            target: api
+            image: ghcr.io/jesusjbriceno/rag-api
+          - component: operator
+            target: operator
+            image: ghcr.io/jesusjbriceno/rag-operator
+    steps:
+      - name: Checkout
+        uses: actions/checkout@eef61447b9ff4aafe5dcd4e0bbf5d482be7e7871 # v4.2.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f7ce87c1d6bead3e36075b2ce75da1f6cc28aaca # v3.9.0
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@fb28c2b6339dcd94da6e4cbcbc5e888961f6f8c3 # v3.9.0
+        with:
+          cosign-release: v2.5.0
+
+      - name: Install Syft and crane
+        run: |
+          set -Eeuo pipefail
+          install_dir="${RUNNER_TEMP}/tools"
+          mkdir -p "${install_dir}"
+          curl -fsSL "https://github.com/anchore/syft/releases/download/v1.20.0/syft_1.20.0_linux_amd64.tar.gz" \
+            -o "${install_dir}/syft.tar.gz"
+          echo "689e12c5cbf67521ce61b9c126068f9eaabe1223e77971b2fede50033ff6b5cc  ${install_dir}/syft.tar.gz" \
+            | sha256sum -c -
+          tar -xzf "${install_dir}/syft.tar.gz" -C "${install_dir}" syft
+          curl -fsSL "https://github.com/google/go-containerregistry/releases/download/v0.20.3/go-containerregistry_Linux_x86_64.tar.gz" \
+            -o "${install_dir}/crane.tar.gz"
+          echo "36c67a932f489b3f2724b64af90b599a8ef2aa7b004872597373c0ad694dc059  ${install_dir}/crane.tar.gz" \
+            | sha256sum -c -
+          tar -xzf "${install_dir}/crane.tar.gz" -C "${install_dir}" crane
+          echo "${install_dir}" >> "${GITHUB_PATH}"
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Derive and validate release tag
+        id: tag
+        run: |
+          set -Eeuo pipefail
+          tag="${GITHUB_REF_NAME}"
+          if [[ ! "${tag}" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::Refusing to publish: '${tag}' is not a semver tag matching ^vX.Y.Z[-prerelease][+build]."
+            exit 1
+          fi
+          {
+            echo "publication_tag=${tag}"
+            echo "version=${tag#v}"
+          } >> "${GITHUB_OUTPUT}"
+
+      # Build only into a local docker archive. Nothing is pushed to the
+      # registry here: the candidate is scanned and attested before any
+      # registry image (including a staging tag) is created.
+      - name: Build image locally (no publish)
+        id: build
+        uses: docker/build-push-action@ee4ca427a2f43b6a16632044ca514c076267da23 # v6.19.0
+        with:
+          context: .
+          file: Dockerfile
+          target: ${{ matrix.target }}
+          push: false
+          provenance: false
+          outputs: type=docker,dest=${{ runner.temp }}/image.tar
+          build-args: |
+            PUBLICATION_VERSION=${{ steps.tag.outputs.publication_tag }}
+            REVISION=${{ github.sha }}
+            ASSEMBLY_VERSION=${{ steps.tag.outputs.version }}
+          labels: |
+            org.opencontainers.image.version=${{ steps.tag.outputs.publication_tag }}
+            org.opencontainers.image.revision=${{ github.sha }}
+
+      - name: Generate SBOM from local archive
+        run: |
+          set -Eeuo pipefail
+          syft "docker-archive:${RUNNER_TEMP}/image.tar" \
+            -o "spdx-json=${RUNNER_TEMP}/sbom.spdx.json"
+
+      - name: Scan local image for HIGH/CRITICAL vulnerabilities
+        uses: aquasecurity/trivy-action@f9424c10c36e288d5fa79bd3dfd1aeb2d6eae808 # v0.33.0
+        with:
+          input: ${{ runner.temp }}/image.tar
+          severity: HIGH,CRITICAL
+          exit-code: '1'
+          ignore-unfixed: 'false'
+          format: table
+          version: v0.65.0
+
+      # Only the exact archive that was SBOM'd and scanned is uploaded, and
+      # only by digest (no tag), so no registry image becomes pullable before
+      # signing and verification succeed.
+      - name: Upload clean candidate by digest
+        id: upload
+        env:
+          IMAGE: ${{ matrix.image }}
+        run: |
+          set -Eeuo pipefail
+          image="${IMAGE}"
+          archive="${RUNNER_TEMP}/image.tar"
+          digest="$(crane digest --tarball "${archive}")"
+          crane push "${archive}" "${image}@${digest}"
+          echo "digest=${digest}" >> "${GITHUB_OUTPUT}"
+
+      - name: Sign, attest, verify, and publish final tag
+        env:
+          IMAGE: ${{ matrix.image }}
+          IMAGE_DIGEST: ${{ steps.upload.outputs.digest }}
+          PUBLICATION_TAG: ${{ steps.tag.outputs.publication_tag }}
+        run: |
+          set -Eeuo pipefail
+
+          image="${IMAGE}"
+          digest="${IMAGE_DIGEST}"
+          publication_tag="${PUBLICATION_TAG}"
+          sbom="${RUNNER_TEMP}/sbom.spdx.json"
+          identity="https://github.com/jesusjbriceno/rag-api/.github/workflows/ci-release.yml@refs/tags/${publication_tag}"
+          issuer="https://token.actions.githubusercontent.com"
+
+          # Keyless signature over the image manifest digest.
+          cosign sign --yes "${image}@${digest}"
+
+          # Attach the SPDX SBOM as an attestation.
+          cosign attest --yes \
+            --type spdxjson \
+            --predicate "${sbom}" \
+            "${image}@${digest}"
+
+          # Attach SLSA v1 provenance describing this build.
+          provenance="${RUNNER_TEMP}/provenance.json"
+          cat > "${provenance}" <<EOF
+          {
+            "_type": "https://in-toto.io/Statement/v1",
+            "subject": [
+              {
+                "name": "${image}",
+                "digest": { "sha256": "${digest#sha256:}" }
+              }
+            ],
+            "predicateType": "https://slsa.dev/provenance/v1",
+            "predicate": {
+              "buildDefinition": {
+                "buildType": "https://github.com/jesusjbriceno/rag-api/.github/workflows/ci-release.yml@refs/tags/${publication_tag}",
+                "externalParameters": {
+                  "source": {
+                    "uri": "git+https://github.com/jesusjbriceno/rag-api@refs/tags/${publication_tag}",
+                    "digest": { "sha1": "${GITHUB_SHA}" }
+                  }
+                }
+              },
+              "runDetails": {
+                "builder": {
+                  "id": "https://github.com/jesusjbriceno/rag-api/.github/workflows/ci-release.yml@refs/tags/${publication_tag}"
+                },
+                "metadata": {
+                  "invocationId": "https://github.com/jesusjbriceno/rag-api/actions/runs/${GITHUB_RUN_ID}"
+                }
+              }
+            }
+          }
+          EOF
+          cosign attest --yes \
+            --type slsaprovenance1 \
+            --predicate "${provenance}" \
+            "${image}@${digest}"
+
+          # Verify signature, SBOM attestation, and provenance attestation.
+          cosign verify --yes \
+            --certificate-oidc-issuer "${issuer}" \
+            --certificate-identity "${identity}" \
+            "${image}@${digest}"
+
+          cosign verify-attestation --yes --type spdxjson \
+            --certificate-oidc-issuer "${issuer}" \
+            --certificate-identity "${identity}" \
+            "${image}@${digest}"
+
+          cosign verify-attestation --yes --type slsaprovenance1 \
+            --certificate-oidc-issuer "${issuer}" \
+            --certificate-identity "${identity}" \
+            "${image}@${digest}"
+
+          # Collision check: never move an existing final tag to a different digest.
+          if existing_digest="$(docker buildx imagetools inspect --format '{{.Manifest.Digest}}' "${image}:${publication_tag}" 2>/dev/null)"; then
+            if [[ "${existing_digest}" != "${digest}" ]]; then
+              echo "::error::Final tag ${image}:${publication_tag} already exists with digest ${existing_digest}; refusing to move it to ${digest}."
+              exit 1
+            fi
+            echo "Final tag ${image}:${publication_tag} already exists with the same digest; publication is idempotent."
+          else
+            # The immutable final tag is created only after scan, sign, attest, and verify all passed.
+            cosign copy "${image}@${digest}" "${image}:${publication_tag}"
+            echo "Published ${image}:${publication_tag} at digest ${digest}."
+          fi
+
+  retention:
+    name: Prune stale staging tags
+    needs:
+      - package
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write # delete stale GHCR package versions
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Prune stale staging versions
+        run: |
+          set -Eeuo pipefail
+
+          owner="jesusjbriceno"
+          now="$(date -u +%s)"
+          staging_min_age_seconds=86400
+
+          prune_staging() {
+            local package="$1"
+            gh api --paginate "/users/${owner}/packages/container/${package}/versions" \
+              | jq -r --argjson now "${now}" --argjson min_age "${staging_min_age_seconds}" '
+                  .[]? | select((.metadata.container.tags // []) | any(startswith("staging-")))
+                  | select((($now - (.created_at | fromdateiso8601)) > $min_age))
+                  | .id
+                ' \
+              | while read -r version_id; do
+                  gh api -X DELETE "/users/${owner}/packages/container/${package}/versions/${version_id}" >/dev/null
+                  echo "Deleted stale staging version ${version_id} of ${package}"
+                done
+          }
+
+          prune_staging "rag-api"
+          prune_staging "rag-operator"
+
+  release:
+    name: Create GitHub Release
+    needs:
+      - package
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the GitHub Release record only
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Create GitHub Release
+        run: |
+          set -Eeuo pipefail
+          tag="${GITHUB_REF_NAME}"
+          if [[ ! "${tag}" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::Refusing to release: '${tag}' is not a semver tag."
+            exit 1
+          fi
+          core="${tag#v}"
+          core="${core%%+*}"
+          args=(release create "${tag}" --title "${tag}" --generate-notes --target "${GITHUB_SHA}")
+          if [[ "${core}" == *-* ]]; then
+            args+=(--prerelease)
+          fi
+          gh "${args[@]}"
