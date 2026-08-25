@@ -5,7 +5,7 @@ Deploy this Compose stack privately, then let approved client stacks reach only 
 ## Quick path
 
 1. Create a Coolify **Service Stack** from this repository using `compose.coolify.yaml`.
-2. Add the required deployment secrets in Coolify and deploy without domains or port mappings.
+2. Add the required deployment secrets in Coolify and set `RAG_API_IMAGE_TAG` to a verified published version (see [Image publication, verification, and rollback](#image-publication-verification-and-rollback)); deploy without domains or port mappings.
 3. Wait for `model-download` and `migrate` to complete successfully; llama.cpp and then the API start. The API must become ready.
 4. Enable **Connect to Predefined Network** on both the RAG and client service stacks. Put the Coolify-generated full API service hostname in the client stack's environment, for example `RAG_API_BASE_URL=http://rag-api-<resource-uuid>:8080`.
 
@@ -113,6 +113,69 @@ The output is atomically published as `<output>/<backup-id>/` only after verific
 Exit code `0` means a verified backup; `2` means invalid contract input or missing tool; `3` is PostgreSQL dump failure; `4` is content snapshot failure; `5` is verification failure. The scheduler owns retention, copying the completed directory to a destination, alerting, and testing restores.
 
 For recovery, stop writers, restore `postgres.dump` with `pg_restore` into a compatible pgvector PostgreSQL instance, verify the `vector` extension, extract `content.tar` into the mounted content volume, restore API write access, and check `/api/v1/health/ready`. Recovery operators own destination retrieval, volume mounting, access permissions, and post-restore data validation.
+
+## Image publication, verification, and rollback
+
+Coolify never builds the application images; it pulls pre-built, verified images from GHCR.
+
+### How images are published
+
+Three least-privilege GitHub Actions workflows publish only verified images.
+
+| Workflow | Trigger | Publishes |
+| --- | --- | --- |
+| `ci-pr.yml` | Pull request to `develop` | Nothing — build and test gate only. |
+| `ci-develop.yml` | Push to `develop` | `develop-<40-char-sha>` pre-release images after SonarQube, Trivy, sign, and attest. |
+| `ci-release.yml` | Semver tag push `v*` | Immutable `vX.Y.Z` images plus a GitHub Release; `-rc.N` tags are pre-releases. |
+
+Every image is scanned with Trivy (HIGH/CRITICAL blocks publication), keyless-signed with cosign, and carries a SPDX SBOM and SLSA v1 provenance attestation. The final tag is created only after scanning, signing, and verification; an existing tag is never moved to a different digest.
+
+### Verify signatures and SBOM
+
+Verify a release tag before pinning it. Repeat for both `rag-api` and `rag-operator`.
+
+```bash
+IDENTITY="https://github.com/jesusjbriceno/rag-api/.github/workflows/ci-release.yml@refs/tags/v0.1.0-rc.1"
+IMAGE="ghcr.io/jesusjbriceno/rag-api:v0.1.0-rc.1"
+
+cosign verify \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-identity "$IDENTITY" "$IMAGE"
+
+cosign verify-attestation --type spdxjson \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-identity "$IDENTITY" "$IMAGE"
+
+cosign verify-attestation --type slsaprovenance1 \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-identity "$IDENTITY" "$IMAGE"
+```
+
+For a `develop-<sha>` image, use the develop identity and the matching tag:
+
+```bash
+cosign verify \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-identity "https://github.com/jesusjbriceno/rag-api/.github/workflows/ci-develop.yml@refs/heads/develop" \
+  ghcr.io/jesusjbriceno/rag-api:develop-<sha>
+```
+
+### Pin the image version
+
+`compose.coolify.yaml` references `ghcr.io/jesusjbriceno/rag-api:${RAG_API_IMAGE_TAG}` and `ghcr.io/jesusjbriceno/rag-operator:${RAG_API_IMAGE_TAG}` with `pull_policy: always`. Set `RAG_API_IMAGE_TAG` in the Coolify deployment environment to one exact published version:
+
+- `v0.1.0-rc.1` — a release tag (pre-release for this foundation).
+- `develop-<sha>` — a develop pre-release, for testing only.
+
+Never use `latest`, an empty value, or a floating channel. Both services share the one tag, so the API and operator stay version-coordinated.
+
+### Roll back
+
+1. Set `RAG_API_IMAGE_TAG` to the previous verified semver tag.
+2. Redeploy the stack.
+3. Confirm `GET /api/v1/health/ready` returns `200`.
+
+Rollback is a re-pull of an immutable digest: `pull_policy: always` fetches the previously verified tag, and a pull failure fails the deployment without falling back to a local build. To pin even harder, replace the tag with its digest (`image: ...@sha256:<digest>`) after verifying it with cosign.
 
 ## Out of scope
 

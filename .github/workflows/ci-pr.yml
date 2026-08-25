@@ -1,0 +1,56 @@
+name: ci-pr
+
+on:
+  pull_request:
+    branches:
+      - develop
+
+concurrency:
+  group: pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+# Least privilege: PR validation gets nothing beyond read-only contents access.
+# No `packages: write`, no `id-token: write`, and no secrets are ever referenced,
+# so this workflow cannot publish images, request SonarQube credentials, or mint
+# an OIDC token for signing.
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Validate pull request
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@eef61447b9ff4aafe5dcd4e0bbf5d482be7e7871 # v4.2.1
+        with:
+          persist-credentials: false
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
+        with:
+          global-json-file: global.json
+
+      - name: Restore
+        run: dotnet restore Rag.sln
+
+      - name: Build
+        run: dotnet build Rag.sln --configuration Release --no-restore
+
+      - name: Test
+        run: dotnet test Rag.sln --configuration Release --no-build
+
+      - name: Validate production Compose
+        run: bash scripts/validate-coolify-compose.sh
+
+      - name: Lint workflows with actionlint
+        env:
+          ACTIONLINT_VERSION: 1.7.12
+        run: |
+          set -Eeuo pipefail
+          curl -fsSL "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz" \
+            -o "${RUNNER_TEMP}/actionlint.tar.gz"
+          tar -xzf "${RUNNER_TEMP}/actionlint.tar.gz" -C "${RUNNER_TEMP}" actionlint
+          "${RUNNER_TEMP}/actionlint" .github/workflows

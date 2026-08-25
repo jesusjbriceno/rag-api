@@ -5,7 +5,7 @@ This repository deploys the RAG API, PostgreSQL with pgvector, a private CPU-onl
 ## Quick path
 
 1. In Coolify, create a **Service Stack** from this repository and select `compose.coolify.yaml`.
-2. Add the deployment secrets listed in [Coolify delivery](docs/deployment/coolify.md#secret-inventory); never upload this repository's `.env.example` as production configuration.
+2. Add the deployment secrets listed in [Coolify delivery](docs/deployment/coolify.md#secret-inventory) and pin `RAG_API_IMAGE_TAG` to a verified published version; never upload this repository's `.env.example` as production configuration.
 3. Deploy. Coolify starts PostgreSQL, downloads and verifies the immutable Qwen GGUF, applies the idempotent migration, then starts llama.cpp and the API.
 4. From a separate client stack, use Coolify's generated full API hostname on its predefined network. Do not create a domain or publish a port for this stack.
 
@@ -45,6 +45,41 @@ This is a forward-only empty-data cutover. The migration stops before the runtim
 | Backup contract | `scripts/backup-rag.sh <backup-id> <output-directory> <content-directory>` |
 
 Health endpoints are intentionally anonymous for orchestration. All data routes remain protected by the fallback JWT authorization policy.
+
+## Image publication and verification
+
+Three least-privilege GitHub Actions workflows publish only verified images to GHCR:
+
+| Workflow | Trigger | Result |
+| --- | --- | --- |
+| `ci-pr.yml` | Pull request to `develop` | Build + test gate only; no publish, no SonarQube. |
+| `ci-develop.yml` | Push to `develop` | Build/test/SonarQube, then publishes `develop-<sha>` pre-release images. |
+| `ci-release.yml` | Semver tag `v*` push | Build/test, then publishes immutable `vX.Y.Z` images and creates a GitHub Release (`-rc.N` tags are pre-releases). |
+
+Every image is Trivy-scanned (HIGH/CRITICAL blocks publication), keyless-signed with cosign, and carries a SPDX SBOM plus SLSA provenance attestation. Final tags are created only after signing and verification, and an existing tag is never moved to a different digest.
+
+Verify a release image before deploying it:
+
+```bash
+IDENTITY="https://github.com/jesusjbriceno/rag-api/.github/workflows/ci-release.yml@refs/tags/v0.1.0-rc.1"
+IMAGE="ghcr.io/jesusjbriceno/rag-api:v0.1.0-rc.1"
+
+cosign verify \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-identity "$IDENTITY" "$IMAGE"
+
+cosign verify-attestation --type spdxjson \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-identity "$IDENTITY" "$IMAGE"
+```
+
+For `develop-<sha>` images, use `--certificate-identity "https://github.com/jesusjbriceno/rag-api/.github/workflows/ci-develop.yml@refs/heads/develop"` against the matching tag.
+
+## Pin and roll back
+
+Production Compose pulls `ghcr.io/jesusjbriceno/rag-api` and `rag-operator` at one shared `RAG_API_IMAGE_TAG` with `pull_policy: always`. Pin it to an exact published version (for example `v0.1.0-rc.1`), never `latest` or a floating channel.
+
+To roll back, set `RAG_API_IMAGE_TAG` to the previous verified semver tag and redeploy: the stack re-pulls that immutable digest, and a pull failure never falls back to a local build. The full operator contract is in [the deployment guide](docs/deployment/coolify.md#image-publication-verification-and-rollback).
 
 ## Deployment checklist
 

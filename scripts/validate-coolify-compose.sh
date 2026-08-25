@@ -9,4 +9,4 @@ docker compose \
     config --format json |
     python3 "$repository_root/scripts/validate-coolify-compose.py" "$repository_root/scripts/download-llamacpp-model.sh"
 
-printf 'Coolify Compose validation passed: pinned llama.cpp runtime, verified model download gates, and private CPU-only topology.\n'
+printf 'Coolify Compose validation passed: pinned llama.cpp runtime, verified model download gates, private CPU-only topology, and pull-only immutable application images.\n'
