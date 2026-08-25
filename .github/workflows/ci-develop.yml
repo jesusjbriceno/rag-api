@@ -1,0 +1,301 @@
+name: ci-develop
+
+on:
+  push:
+    branches:
+      - develop
+
+concurrency:
+  group: develop-${{ github.sha }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    name: SonarQube quality gate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@eef61447b9ff4aafe5dcd4e0bbf5d482be7e7871 # v4.2.1
+        with:
+          persist-credentials: false
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
+        with:
+          global-json-file: global.json
+
+      - name: Install SonarScanner for .NET
+        run: dotnet tool install --global dotnet-sonarscanner --version 11.2.1
+
+      - name: Begin SonarQube analysis
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ vars.SONAR_HOST_URL }}
+        run: |
+          set -Eeuo pipefail
+          dotnet sonarscanner begin \
+            /k:"rag-api" \
+            /n:"rag-api" \
+            /d:sonar.host.url="${SONAR_HOST_URL}" \
+            /d:sonar.token="${SONAR_TOKEN}" \
+            /d:sonar.cs.opencover.reportsPaths="${RUNNER_TEMP}/coverage/**/coverage.opencover.xml"
+
+      - name: Restore
+        run: dotnet restore Rag.sln
+
+      - name: Build
+        run: dotnet build Rag.sln --configuration Release --no-restore
+
+      - name: Test with OpenCover coverage
+        run: |
+          set -Eeuo pipefail
+          dotnet test Rag.sln --configuration Release --no-build \
+            --collect:"XPlat Code Coverage;Format=opencover" \
+            --results-directory "${RUNNER_TEMP}/coverage"
+
+      - name: End SonarQube analysis
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ vars.SONAR_HOST_URL }}
+        run: |
+          set -Eeuo pipefail
+          dotnet sonarscanner end /d:sonar.token="${SONAR_TOKEN}"
+
+  package:
+    name: Build, scan, sign, publish (${{ matrix.component }})
+    needs:
+      - quality
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write # push and tag container images on GHCR
+      id-token: write # mint OIDC token for keyless cosign signing
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - component: api
+            target: api
+            image: ghcr.io/jesusjbriceno/rag-api
+          - component: operator
+            target: operator
+            image: ghcr.io/jesusjbriceno/rag-operator
+    steps:
+      - name: Checkout
+        uses: actions/checkout@eef61447b9ff4aafe5dcd4e0bbf5d482be7e7871 # v4.2.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f7ce87c1d6bead3e36075b2ce75da1f6cc28aaca # v3.9.0
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@fb28c2b6339dcd94da6e4cbcbc5e888961f6f8c3 # v3.9.0
+        with:
+          cosign-release: v2.5.0
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Derive and validate publication tag
+        id: tag
+        run: |
+          set -Eeuo pipefail
+          if [[ ! "${GITHUB_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Refusing to publish: GITHUB_SHA '${GITHUB_SHA}' is not a 40-character hex commit SHA."
+            exit 1
+          fi
+          echo "publication_tag=develop-${GITHUB_SHA}" >> "${GITHUB_OUTPUT}"
+          echo "staging_tag=staging-${GITHUB_SHA}" >> "${GITHUB_OUTPUT}"
+
+      - name: Build and publish image (staging)
+        id: build
+        uses: docker/build-push-action@ee4ca427a2f43b6a16632044ca514c076267da23 # v6.19.0
+        with:
+          context: .
+          file: Dockerfile
+          target: ${{ matrix.target }}
+          push: true
+          tags: ${{ matrix.image }}:${{ steps.tag.outputs.staging_tag }}
+          build-args: |
+            VERSION=develop-${{ github.sha }}
+            REVISION=${{ github.sha }}
+          labels: |
+            org.opencontainers.image.version=develop-${{ github.sha }}
+            org.opencontainers.image.revision=${{ github.sha }}
+
+      - name: Generate SBOM
+        uses: anchore/sbom-action@fbfd9c6c189226748411491745178e0c2017392d # v0.20.10
+        with:
+          image: ${{ matrix.image }}@${{ steps.build.outputs.digest }}
+          format: spdx-json
+          output-file: ${{ runner.temp }}/sbom.spdx.json
+          upload-artifact: 'false'
+          upload-release-assets: 'false'
+
+      - name: Scan image for HIGH/CRITICAL vulnerabilities
+        uses: aquasecurity/trivy-action@f9424c10c36e288d5fa79bd3dfd1aeb2d6eae808 # v0.33.0
+        with:
+          image-ref: ${{ matrix.image }}@${{ steps.build.outputs.digest }}
+          severity: HIGH,CRITICAL
+          exit-code: '1'
+          ignore-unfixed: 'false'
+          format: table
+          version: v0.65.0
+
+      - name: Sign, attest, verify, and publish final tag
+        env:
+          IMAGE: ${{ matrix.image }}
+          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
+          PUBLICATION_TAG: ${{ steps.tag.outputs.publication_tag }}
+        run: |
+          set -Eeuo pipefail
+
+          image="${IMAGE}"
+          digest="${IMAGE_DIGEST}"
+          publication_tag="${PUBLICATION_TAG}"
+          sbom="${RUNNER_TEMP}/sbom.spdx.json"
+          identity="https://github.com/jesusjbriceno/rag-api/.github/workflows/ci-develop.yml@refs/heads/develop"
+          issuer="https://token.actions.githubusercontent.com"
+
+          # Keyless signature over the image manifest digest.
+          cosign sign --yes "${image}@${digest}"
+
+          # Attach the SPDX SBOM as an attestation.
+          cosign attest --yes \
+            --type spdxjson \
+            --predicate "${sbom}" \
+            "${image}@${digest}"
+
+          # Attach SLSA v1 provenance describing this build.
+          provenance="${RUNNER_TEMP}/provenance.json"
+          cat > "${provenance}" <<EOF
+          {
+            "_type": "https://in-toto.io/Statement/v1",
+            "subject": [
+              {
+                "name": "${image}",
+                "digest": { "sha256": "${digest#sha256:}" }
+              }
+            ],
+            "predicateType": "https://slsa.dev/provenance/v1",
+            "predicate": {
+              "buildDefinition": {
+                "buildType": "https://github.com/jesusjbriceno/rag-api/.github/workflows/ci-develop.yml@refs/heads/develop",
+                "externalParameters": {
+                  "source": {
+                    "uri": "git+https://github.com/jesusjbriceno/rag-api@refs/heads/develop",
+                    "digest": { "sha1": "${GITHUB_SHA}" }
+                  }
+                }
+              },
+              "runDetails": {
+                "builder": {
+                  "id": "https://github.com/jesusjbriceno/rag-api/.github/workflows/ci-develop.yml@refs/heads/develop"
+                },
+                "metadata": {
+                  "invocationId": "https://github.com/jesusjbriceno/rag-api/actions/runs/${GITHUB_RUN_ID}"
+                }
+              }
+            }
+          }
+          EOF
+          cosign attest --yes \
+            --type slsaprovenance1 \
+            --predicate "${provenance}" \
+            "${image}@${digest}"
+
+          # Verify signature, SBOM attestation, and provenance attestation.
+          cosign verify --yes \
+            --certificate-oidc-issuer "${issuer}" \
+            --certificate-identity "${identity}" \
+            "${image}@${digest}"
+
+          cosign verify-attestation --yes --type spdxjson \
+            --certificate-oidc-issuer "${issuer}" \
+            --certificate-identity "${identity}" \
+            "${image}@${digest}"
+
+          cosign verify-attestation --yes --type slsaprovenance1 \
+            --certificate-oidc-issuer "${issuer}" \
+            --certificate-identity "${identity}" \
+            "${image}@${digest}"
+
+          # Collision check: never move an existing final tag to a different digest.
+          if existing_digest="$(docker buildx imagetools inspect --format '{{.Manifest.Digest}}' "${image}:${publication_tag}" 2>/dev/null)"; then
+            if [[ "${existing_digest}" != "${digest}" ]]; then
+              echo "::error::Final tag ${image}:${publication_tag} already exists with digest ${existing_digest}; refusing to move it to ${digest}."
+              exit 1
+            fi
+            echo "Final tag ${image}:${publication_tag} already exists with the same digest; publication is idempotent."
+          else
+            # The immutable final tag is created only after scan, sign, attest, and verify all passed.
+            cosign copy "${image}@${digest}" "${image}:${publication_tag}"
+            echo "Published ${image}:${publication_tag} at digest ${digest}."
+          fi
+
+  retention:
+    name: Prune stale develop tags
+    needs:
+      - package
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write # delete stale GHCR package versions
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Prune stale develop and staging versions
+        run: |
+          set -Eeuo pipefail
+
+          owner="jesusjbriceno"
+          now="$(date -u +%s)"
+          retain_develop=20
+          develop_min_age_seconds=2592000
+          staging_min_age_seconds=86400
+
+          prune_develop() {
+            local package="$1"
+            gh api --paginate "/users/${owner}/packages/container/${package}/versions" \
+              | jq -r --argjson now "${now}" --argjson retain "${retain_develop}" --argjson min_age "${develop_min_age_seconds}" '
+                  [ .[]? | select((.metadata.container.tags // []) | any(startswith("develop-"))) ]
+                  | sort_by(.created_at) | reverse
+                  | .[($retain):]
+                  | .[]
+                  | select((($now - (.created_at | fromdateiso8601)) > $min_age))
+                  | .id
+                ' \
+              | while read -r version_id; do
+                  gh api -X DELETE "/users/${owner}/packages/container/${package}/versions/${version_id}" >/dev/null
+                  echo "Deleted stale develop version ${version_id} of ${package}"
+                done
+          }
+
+          prune_staging() {
+            local package="$1"
+            gh api --paginate "/users/${owner}/packages/container/${package}/versions" \
+              | jq -r --argjson now "${now}" --argjson min_age "${staging_min_age_seconds}" '
+                  .[]? | select((.metadata.container.tags // []) | any(startswith("staging-")))
+                  | select((($now - (.created_at | fromdateiso8601)) > $min_age))
+                  | .id
+                ' \
+              | while read -r version_id; do
+                  gh api -X DELETE "/users/${owner}/packages/container/${package}/versions/${version_id}" >/dev/null
+                  echo "Deleted stale staging version ${version_id} of ${package}"
+                done
+          }
+
+          prune_develop "rag-api"
+          prune_develop "rag-operator"
+          prune_staging "rag-api"
+          prune_staging "rag-operator"
