@@ -1,20 +1,20 @@
-name: ci-develop
+name: ci-release
 
 on:
   push:
-    branches:
-      - develop
+    tags:
+      - 'v*'
 
 concurrency:
-  group: develop-${{ github.sha }}
+  group: release-${{ github.ref }}
   cancel-in-progress: false
 
 permissions:
   contents: read
 
 jobs:
-  quality:
-    name: SonarQube quality gate
+  validate:
+    name: Build and test release candidate
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -29,47 +29,19 @@ jobs:
         with:
           global-json-file: global.json
 
-      - name: Install SonarScanner for .NET
-        run: dotnet tool install --global dotnet-sonarscanner --version 11.2.1
-
-      - name: Begin SonarQube analysis
-        env:
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-          SONAR_HOST_URL: ${{ vars.SONAR_HOST_URL }}
-        run: |
-          set -Eeuo pipefail
-          dotnet sonarscanner begin \
-            /k:"rag-api" \
-            /n:"rag-api" \
-            /d:sonar.host.url="${SONAR_HOST_URL}" \
-            /d:sonar.token="${SONAR_TOKEN}" \
-            /d:sonar.cs.opencover.reportsPaths="${RUNNER_TEMP}/coverage/**/coverage.opencover.xml"
-
       - name: Restore
         run: dotnet restore Rag.sln
 
       - name: Build
         run: dotnet build Rag.sln --configuration Release --no-restore
 
-      - name: Test with OpenCover coverage
-        run: |
-          set -Eeuo pipefail
-          dotnet test Rag.sln --configuration Release --no-build \
-            --collect:"XPlat Code Coverage;Format=opencover" \
-            --results-directory "${RUNNER_TEMP}/coverage"
-
-      - name: End SonarQube analysis
-        env:
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-          SONAR_HOST_URL: ${{ vars.SONAR_HOST_URL }}
-        run: |
-          set -Eeuo pipefail
-          dotnet sonarscanner end /d:sonar.token="${SONAR_TOKEN}"
+      - name: Test
+        run: dotnet test Rag.sln --configuration Release --no-build
 
   package:
     name: Build, scan, sign, publish (${{ matrix.component }})
     needs:
-      - quality
+      - validate
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -123,15 +95,19 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Derive and validate publication tag
+      - name: Derive and validate release tag
         id: tag
         run: |
           set -Eeuo pipefail
-          if [[ ! "${GITHUB_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "::error::Refusing to publish: GITHUB_SHA '${GITHUB_SHA}' is not a 40-character hex commit SHA."
+          tag="${GITHUB_REF_NAME}"
+          if [[ ! "${tag}" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::Refusing to publish: '${tag}' is not a semver tag matching ^vX.Y.Z[-prerelease][+build]."
             exit 1
           fi
-          echo "publication_tag=develop-${GITHUB_SHA}" >> "${GITHUB_OUTPUT}"
+          {
+            echo "publication_tag=${tag}"
+            echo "version=${tag#v}"
+          } >> "${GITHUB_OUTPUT}"
 
       # Build only into a local docker archive. Nothing is pushed to the
       # registry here: the candidate is scanned and attested before any
@@ -147,10 +123,11 @@ jobs:
           provenance: false
           outputs: type=docker,dest=${{ runner.temp }}/image.tar
           build-args: |
-            PUBLICATION_VERSION=develop-${{ github.sha }}
+            PUBLICATION_VERSION=${{ steps.tag.outputs.publication_tag }}
             REVISION=${{ github.sha }}
+            ASSEMBLY_VERSION=${{ steps.tag.outputs.version }}
           labels: |
-            org.opencontainers.image.version=develop-${{ github.sha }}
+            org.opencontainers.image.version=${{ steps.tag.outputs.publication_tag }}
             org.opencontainers.image.revision=${{ github.sha }}
 
       - name: Generate SBOM from local archive
@@ -196,7 +173,7 @@ jobs:
           digest="${IMAGE_DIGEST}"
           publication_tag="${PUBLICATION_TAG}"
           sbom="${RUNNER_TEMP}/sbom.spdx.json"
-          identity="https://github.com/jesusjbriceno/rag-api/.github/workflows/ci-develop.yml@refs/heads/develop"
+          identity="https://github.com/jesusjbriceno/rag-api/.github/workflows/ci-release.yml@refs/tags/${publication_tag}"
           issuer="https://token.actions.githubusercontent.com"
 
           # Keyless signature over the image manifest digest.
@@ -222,17 +199,17 @@ jobs:
             "predicateType": "https://slsa.dev/provenance/v1",
             "predicate": {
               "buildDefinition": {
-                "buildType": "https://github.com/jesusjbriceno/rag-api/.github/workflows/ci-develop.yml@refs/heads/develop",
+                "buildType": "https://github.com/jesusjbriceno/rag-api/.github/workflows/ci-release.yml@refs/tags/${publication_tag}",
                 "externalParameters": {
                   "source": {
-                    "uri": "git+https://github.com/jesusjbriceno/rag-api@refs/heads/develop",
+                    "uri": "git+https://github.com/jesusjbriceno/rag-api@refs/tags/${publication_tag}",
                     "digest": { "sha1": "${GITHUB_SHA}" }
                   }
                 }
               },
               "runDetails": {
                 "builder": {
-                  "id": "https://github.com/jesusjbriceno/rag-api/.github/workflows/ci-develop.yml@refs/heads/develop"
+                  "id": "https://github.com/jesusjbriceno/rag-api/.github/workflows/ci-release.yml@refs/tags/${publication_tag}"
                 },
                 "metadata": {
                   "invocationId": "https://github.com/jesusjbriceno/rag-api/actions/runs/${GITHUB_RUN_ID}"
@@ -276,7 +253,7 @@ jobs:
           fi
 
   retention:
-    name: Prune stale develop tags
+    name: Prune stale staging tags
     needs:
       - package
     runs-on: ubuntu-latest
@@ -286,32 +263,13 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
-      - name: Prune stale develop and staging versions
+      - name: Prune stale staging versions
         run: |
           set -Eeuo pipefail
 
           owner="jesusjbriceno"
           now="$(date -u +%s)"
-          retain_develop=20
-          develop_min_age_seconds=2592000
           staging_min_age_seconds=86400
-
-          prune_develop() {
-            local package="$1"
-            gh api --paginate "/users/${owner}/packages/container/${package}/versions" \
-              | jq -r --argjson now "${now}" --argjson retain "${retain_develop}" --argjson min_age "${develop_min_age_seconds}" '
-                  [ .[]? | select((.metadata.container.tags // []) | any(startswith("develop-"))) ]
-                  | sort_by(.created_at) | reverse
-                  | .[($retain):]
-                  | .[]
-                  | select((($now - (.created_at | fromdateiso8601)) > $min_age))
-                  | .id
-                ' \
-              | while read -r version_id; do
-                  gh api -X DELETE "/users/${owner}/packages/container/${package}/versions/${version_id}" >/dev/null
-                  echo "Deleted stale develop version ${version_id} of ${package}"
-                done
-          }
 
           prune_staging() {
             local package="$1"
@@ -327,7 +285,32 @@ jobs:
                 done
           }
 
-          prune_develop "rag-api"
-          prune_develop "rag-operator"
           prune_staging "rag-api"
           prune_staging "rag-operator"
+
+  release:
+    name: Create GitHub Release
+    needs:
+      - package
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the GitHub Release record only
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Create GitHub Release
+        run: |
+          set -Eeuo pipefail
+          tag="${GITHUB_REF_NAME}"
+          if [[ ! "${tag}" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::Refusing to release: '${tag}' is not a semver tag."
+            exit 1
+          fi
+          core="${tag#v}"
+          core="${core%%+*}"
+          args=(release create "${tag}" --title "${tag}" --generate-notes --target "${GITHUB_SHA}")
+          if [[ "${core}" == *-* ]]; then
+            args+=(--prerelease)
+          fi
+          gh "${args[@]}"
