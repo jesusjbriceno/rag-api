@@ -49,6 +49,7 @@ jobs:
         run: |
           bash scripts/test-ci-publication-guards.sh
           bash scripts/test-ci-publication-marker.sh
+          bash scripts/test-ci-publication-verifier.sh
 
       - name: Lint workflows with actionlint
         env:

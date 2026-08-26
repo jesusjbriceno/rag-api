@@ -11,23 +11,35 @@ source "${repo_root}/scripts/ci-publication-marker.sh"
 verification_result() {
   local label="$1"
   shift
-  local exit_code
+  local exit_code error_file
 
   printf '%s\n' "::notice::async-verification:${label}:started" >&3
-  if run_remote "async-${label}" "$@"; then
+  error_file="$(mktemp)"
+  if run_remote "async-${label}" "$@" >/dev/null 2>"${error_file}"; then
+    rm -f "${error_file}"
     printf '%s\n' "::notice::async-verification:${label}:verified" >&3
     printf '%s\n' verified
     return 0
+  else
+    exit_code="$?"
   fi
 
-  exit_code="$?"
-  if [[ "${exit_code}" -eq 124 || "${exit_code}" -eq 137 ]]; then
+  if [[ "${exit_code}" -eq 124 || "${exit_code}" -eq 137 ]] \
+    || is_verification_access_problem "${error_file}"; then
+    rm -f "${error_file}"
     printf '%s\n' "::warning::async-verification:${label}:unknown" >&3
     printf '%s\n' unknown
   else
+    rm -f "${error_file}"
     printf '%s\n' "::warning::async-verification:${label}:failed" >&3
     printf '%s\n' failed
   fi
+}
+
+is_verification_access_problem() {
+  local error_file="$1"
+
+  grep -Eqi '(UNAUTHORIZED|UNAUTHENTICATED|FORBIDDEN|ACCESS DENIED|AUTHENTICATION REQUIRED|AUTHORIZATION REQUIRED|NO BASIC AUTH CREDENTIALS)' "${error_file}"
 }
 
 record_check() {
@@ -91,6 +103,7 @@ verify_publication() {
   printf 'verification_result=%s\n' "${result}" >>"${GITHUB_OUTPUT}"
   printf "## Asynchronous publication verification\n\nResult: \`%s\`\n\nThis result does not change the durable completion marker.\n" "${result}" >>"${GITHUB_STEP_SUMMARY}"
   record_check "${result}"
+  [[ "${result}" != failed ]]
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
