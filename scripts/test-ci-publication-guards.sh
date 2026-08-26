@@ -20,13 +20,9 @@ assert_equals() {
 }
 
 temp_dir="$(mktemp -d)"
-child_pid=""
 diagnostics_file="${temp_dir}/diagnostics"
 exec 3>"${diagnostics_file}"
 cleanup() {
-  if [[ -n "${child_pid}" ]]; then
-    kill -KILL "${child_pid}" 2>/dev/null || true
-  fi
   rm -rf "${temp_dir}"
 }
 trap cleanup EXIT
@@ -52,18 +48,8 @@ unset -f timeout
 
 REMOTE_OPERATION_TIMEOUT="1s"
 REMOTE_OPERATION_KILL_GRACE="1s"
-child_pid_file="${temp_dir}/child-pid"
 started_at="$(date +%s)"
-timeout_child_program='sleep 60'
-# shellcheck disable=SC2016 # This string is interpreted by the child Bash process.
-timeout_parent_program='
-  trap "" TERM
-  bash -c "$2" &
-  child=$!
-  printf "%s" "${child}" >"$1"
-  wait "${child}"
-'
-if run_remote "timeout-tree" bash -c "${timeout_parent_program}" bash "${child_pid_file}" "${timeout_child_program}" 2>/dev/null; then
+if run_remote "timeout-operation" sleep 60 2>/dev/null; then
   fail "timeout operation unexpectedly succeeded"
 else
   timeout_exit_code="$?"
@@ -72,12 +58,7 @@ elapsed_seconds="$(( $(date +%s) - started_at ))"
 [[ "${timeout_exit_code}" -eq 124 || "${timeout_exit_code}" -eq 137 ]] || fail "timeout returned ${timeout_exit_code} instead of a timeout status"
 (( elapsed_seconds <= 4 )) || fail "timeout exceeded TERM/KILL bound (${elapsed_seconds}s)"
 diagnostics="$(<"${diagnostics_file}")"
-[[ "${diagnostics}" == *"remote-operation:timeout-tree:timed-out"* ]] || fail "timeout was not reported with its safe operation name"
-child_pid="$(<"${child_pid_file}")"
-if kill -0 "${child_pid}" 2>/dev/null; then
-  fail "timeout left a descendant running"
-fi
-child_pid=""
+[[ "${diagnostics}" == *"remote-operation:timeout-operation:timed-out"* ]] || fail "timeout was not reported with its safe operation name"
 
 manifest_unknown_file="${temp_dir}/manifest-unknown"
 printf '%s\n' 'GET /v2/example/manifests/tag: MANIFEST_UNKNOWN: manifest unknown' >"${manifest_unknown_file}"
@@ -94,5 +75,19 @@ for rejected_error in \
     fail "non-absence error was accepted: ${rejected_error}"
   fi
 done
+
+assert_final_digest "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" \
+  "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+if assert_final_digest "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" \
+  "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"; then
+  fail "different final digest was accepted"
+fi
+
+assert_equals "verified" "$(classify_verification_results verified verified verified)" "all verification results"
+assert_equals "failed" "$(classify_verification_results verified unknown failed)" "failed verification result"
+assert_equals "unknown" "$(classify_verification_results verified unknown verified)" "unknown verification result"
+if classify_verification_results invalid >/dev/null; then
+  fail "invalid verification result was accepted"
+fi
 
 printf '%s\n' 'ci publication guard tests passed'

@@ -46,7 +46,9 @@ jobs:
         run: bash scripts/validate-coolify-compose.sh
 
       - name: Test CI publication guards
-        run: bash scripts/test-ci-publication-guards.sh
+        run: |
+          bash scripts/test-ci-publication-guards.sh
+          bash scripts/test-ci-publication-marker.sh
 
       - name: Lint workflows with actionlint
         env:
