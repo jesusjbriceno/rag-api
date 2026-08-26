@@ -198,26 +198,10 @@ jobs:
           sbom="${RUNNER_TEMP}/sbom.spdx.json"
           identity="https://github.com/jesusjbriceno/rag-api/.github/workflows/ci-develop.yml@refs/heads/develop"
           issuer="https://token.actions.githubusercontent.com"
-          remote_timeout="5m"
+          export REMOTE_OPERATION_TIMEOUT="5m"
+          export REMOTE_OPERATION_KILL_GRACE="30s"
           exec 3>&2
-
-          run_remote() {
-            local label="$1"
-            shift
-
-            printf '%s\n' "::notice::remote-operation:${label}:started" >&3
-            if timeout --foreground --signal=TERM --kill-after=30s "${remote_timeout}" "$@"; then
-              printf '%s\n' "::notice::remote-operation:${label}:completed" >&3
-            else
-              local exit_code="$?"
-              if [[ "${exit_code}" -eq 124 || "${exit_code}" -eq 137 ]]; then
-                printf '%s\n' "::error::remote-operation:${label}:timed-out" >&3
-              else
-                printf '%s\n' "::error::remote-operation:${label}:failed" >&3
-              fi
-              return "${exit_code}"
-            fi
-          }
+          source "${GITHUB_WORKSPACE}/scripts/ci-publication-guards.sh"
 
           # Keyless signature over the image manifest digest.
           run_remote "cosign-sign" cosign sign --yes "${image}@${digest}"
@@ -287,9 +271,13 @@ jobs:
           # Collision check: never move an existing final tag to a different digest.
           inspection_output="${RUNNER_TEMP}/final-tag-inspection.txt"
           inspection_error="${RUNNER_TEMP}/final-tag-inspection.err"
-          if run_remote "ghcr-inspect-final-tag" docker buildx imagetools inspect \
-            --format '{{.Manifest.Digest}}' "${image}:${publication_tag}" >"${inspection_output}" 2>"${inspection_error}"; then
+          if run_remote "ghcr-inspect-final-tag" crane digest \
+            "${image}:${publication_tag}" >"${inspection_output}" 2>"${inspection_error}"; then
             existing_digest="$(<"${inspection_output}")"
+            if [[ ! "${existing_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              echo "::error::Final tag inspection returned an invalid digest; refusing publication."
+              exit 1
+            fi
             if [[ "${existing_digest}" != "${digest}" ]]; then
               echo "::error::Final tag ${image}:${publication_tag} already exists with digest ${existing_digest}; refusing to move it to ${digest}."
               exit 1
@@ -297,7 +285,7 @@ jobs:
             echo "Final tag ${image}:${publication_tag} already exists with the same digest; publication is idempotent."
           else
             inspection_exit_code="$?"
-            if ! grep -Eqi 'manifest unknown|name unknown|not found' "${inspection_error}"; then
+            if ! is_manifest_unknown_error "${inspection_error}"; then
               rm -f "${inspection_error}"
               printf '%s\n' "::error::remote-operation:ghcr-inspect-final-tag:unresolved" >&3
               exit "${inspection_exit_code}"
