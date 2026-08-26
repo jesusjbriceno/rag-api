@@ -185,6 +185,7 @@ jobs:
           echo "digest=${digest}" >> "${GITHUB_OUTPUT}"
 
       - name: Sign, attest, verify, and publish final tag
+        timeout-minutes: 10
         env:
           IMAGE: ${{ matrix.image }}
           IMAGE_DIGEST: ${{ steps.upload.outputs.digest }}
