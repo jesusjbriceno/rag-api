@@ -128,7 +128,15 @@ Three least-privilege GitHub Actions workflows publish only verified images.
 | `ci-develop.yml` | Push to `develop` | `develop-<40-char-sha>` pre-release images after SonarQube, Trivy, sign, and attest. |
 | `ci-release.yml` | Semver tag push `v*` | Immutable `vX.Y.Z` images plus a GitHub Release; `-rc.N` tags are pre-releases. |
 
-Every image is scanned with Trivy (HIGH/CRITICAL blocks publication), keyless-signed with cosign, and carries a SPDX SBOM and SLSA v1 provenance attestation. The final tag is created only after scanning, signing, and verification; an existing tag is never moved to a different digest.
+Every image is scanned with Trivy (HIGH/CRITICAL blocks publication), keyless-signed with cosign, and carries a SPDX SBOM and SLSA v1 provenance attestation. The final tag is created only after scanning, signing, and attachment; an existing tag is never moved to a different digest.
+
+### Publication completion record
+
+A visible GHCR tag is not publication-completion evidence. Each successful dual-image finalization writes one durable GitHub Deployment record with `environment` and `task` both set to `publication-completion`; its deployment ID is the completion-marker identity. The marker payload records the source revision, workflow run ID and URL, final tag, both immutable `image@sha256:...` references, both final tag resolutions, and the `attached` outcomes for signature, SPDX, and SLSA.
+
+The marker is written only after both API and operator final tags resolve to their respective immutable digests. Re-runs for the same source and image pair reuse the existing successful marker; records are retained as publication evidence and are not pruned with GHCR tags or workflow artifacts. `ci-develop.yml` never creates a GitHub Release. The release workflow creates its GitHub Release only after its completion marker exists.
+
+Signature, SPDX, and SLSA verification runs afterwards in a separate read-only verification job. Its check run reports `verified`, `failed`, or `unknown`; it has no permission to write packages, tags, releases, or deployment markers, so its result cannot alter completion. A failed or unknown verification result must be investigated before deployment even though it does not rewrite the durable publication record.
 
 ### Verify signatures and SBOM
 

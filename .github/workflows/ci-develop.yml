@@ -71,6 +71,7 @@ jobs:
     needs:
       - quality
     runs-on: ubuntu-latest
+    timeout-minutes: 35
     permissions:
       contents: read
       packages: write # push and tag container images on GHCR
@@ -184,7 +185,7 @@ jobs:
           crane push "${archive}" "${image}@${digest}"
           echo "digest=${digest}" >> "${GITHUB_OUTPUT}"
 
-      - name: Sign, attest, verify, and publish final tag
+      - name: Sign, attest, and publish final tag
         timeout-minutes: 10
         env:
           IMAGE: ${{ matrix.image }}
@@ -253,22 +254,6 @@ jobs:
             --predicate "${provenance}" \
             "${image}@${digest}"
 
-          # Verify signature, SBOM attestation, and provenance attestation.
-          run_remote "cosign-verify-signature" cosign verify \
-            --certificate-oidc-issuer "${issuer}" \
-            --certificate-identity "${identity}" \
-            "${image}@${digest}"
-
-          run_remote "cosign-verify-spdx" cosign verify-attestation --type spdxjson \
-            --certificate-oidc-issuer "${issuer}" \
-            --certificate-identity "${identity}" \
-            "${image}@${digest}"
-
-          run_remote "cosign-verify-slsa" cosign verify-attestation --type slsaprovenance1 \
-            --certificate-oidc-issuer "${issuer}" \
-            --certificate-identity "${identity}" \
-            "${image}@${digest}"
-
           # Collision check: never move an existing final tag to a different digest.
           inspection_output="${RUNNER_TEMP}/final-tag-inspection.txt"
           inspection_error="${RUNNER_TEMP}/final-tag-inspection.err"
@@ -293,16 +278,116 @@ jobs:
             fi
             rm -f "${inspection_error}"
             printf '%s\n' "::notice::remote-operation:ghcr-inspect-final-tag:final-tag-absent" >&3
-            # The immutable final tag is created only after scan, sign, attest, and verify all passed.
+            # The immutable final tag is created only after scan, signing, and both attestations succeeded.
             run_remote "cosign-copy-final-tag" cosign copy "${image}@${digest}" "${image}:${publication_tag}"
             echo "Published ${image}:${publication_tag} at digest ${digest}."
           fi
+
+          final_tag_digest="$(run_remote "ghcr-resolve-final-tag" crane digest "${image}:${publication_tag}")"
+          assert_final_digest "${digest}" "${final_tag_digest}"
+
+          proof_dir="${RUNNER_TEMP}/publication-proof"
+          mkdir -p "${proof_dir}"
+          jq -n \
+            --arg component "${{ matrix.component }}" \
+            --arg source_revision "${GITHUB_SHA}" \
+            --arg run_id "${GITHUB_RUN_ID}" \
+            --arg run_url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+            --arg publication_tag "${publication_tag}" \
+            --arg identity "${identity}" \
+            --arg issuer "${issuer}" \
+            --arg digest_ref "${image}@${digest}" \
+            --arg final_tag_ref "${image}:${publication_tag}" \
+            --arg final_tag_digest "${final_tag_digest}" \
+            '{
+              component: $component,
+              source_revision: $source_revision,
+              workflow: {run_id: $run_id, url: $run_url},
+              publication_tag: $publication_tag,
+              signature: {identity: $identity, issuer: $issuer},
+              digest_ref: $digest_ref,
+              final_tag_ref: $final_tag_ref,
+              final_tag_digest: $final_tag_digest,
+              attachments: {signature: "attached", spdx: "attached", slsa: "attached"}
+            }' >"${proof_dir}/${{ matrix.component }}.json"
+
+      - name: Upload final-tag publication proof
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: publication-proof-${{ matrix.component }}
+          path: ${{ runner.temp }}/publication-proof/${{ matrix.component }}.json
+          if-no-files-found: error
+          retention-days: 1
+
+  completion:
+    name: Record durable publication completion
+    needs:
+      - package
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      deployments: write # create the authoritative completion record only
+    steps:
+      - name: Checkout
+        uses: actions/checkout@eef61447b9ff4aafe5dcd4e0bbf5d482be7e7871 # v4.2.1
+        with:
+          persist-credentials: false
+
+      - name: Download both final-tag publication proofs
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: publication-proof-*
+          path: ${{ runner.temp }}/publication-proofs
+          merge-multiple: true
+
+      - name: Create or reuse durable completion marker
+        id: marker
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: scripts/ci-publication-marker.sh "${RUNNER_TEMP}/publication-proofs"
+
+  verification:
+    name: Verify published attestations asynchronously
+    needs:
+      - completion
+    if: ${{ always() && needs.completion.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    permissions:
+      contents: read
+      packages: read # resolve published images only; no package mutation
+      checks: write # record verified, failed, or unknown without changing publication
+    steps:
+      - name: Checkout
+        uses: actions/checkout@eef61447b9ff4aafe5dcd4e0bbf5d482be7e7871 # v4.2.1
+        with:
+          persist-credentials: false
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@fb28c2b6339dcd94da6e4cbcbc5e888961f6f8c3 # v3.9.0
+        with:
+          cosign-release: v2.5.0
+
+      - name: Download final-tag publication proofs
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: publication-proof-*
+          path: ${{ runner.temp }}/publication-proofs
+          merge-multiple: true
+
+      - name: Verify signatures and attestations outside finalization
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: scripts/ci-publication-verifier.sh "${RUNNER_TEMP}/publication-proofs"
 
   retention:
     name: Prune stale develop tags
     needs:
       - package
     runs-on: ubuntu-latest
+    if: ${{ always() && needs.package.result == 'success' }}
+    continue-on-error: true
     permissions:
       contents: read
       packages: write # delete stale GHCR package versions
