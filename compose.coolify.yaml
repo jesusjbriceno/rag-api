@@ -39,7 +39,7 @@ services:
     restart: unless-stopped
 
   migrate:
-    image: ghcr.io/jesusjbriceno/rag-operator:${RAG_API_IMAGE_TAG}
+    image: ghcr.io/jesusjbriceno/rag-operator${RAG_OPERATOR_IMAGE_REFERENCE}
     pull_policy: always
     command: ["migrate"]
     environment: &rag-environment
@@ -58,7 +58,7 @@ services:
     restart: "no"
 
   api:
-    image: ghcr.io/jesusjbriceno/rag-api:${RAG_API_IMAGE_TAG}
+    image: ghcr.io/jesusjbriceno/rag-api${RAG_API_IMAGE_REFERENCE}
     pull_policy: always
     environment: *rag-environment
     volumes:

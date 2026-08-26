@@ -43,7 +43,9 @@ jobs:
         run: dotnet test Rag.sln --configuration Release --no-build
 
       - name: Validate production Compose
-        run: bash scripts/validate-coolify-compose.sh
+        run: |
+          bash scripts/validate-coolify-compose.sh
+          python3 scripts/test-validate-coolify-compose.py
 
       - name: Test CI publication guards
         run: |

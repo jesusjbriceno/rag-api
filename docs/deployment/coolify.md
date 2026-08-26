@@ -5,7 +5,7 @@ Deploy this Compose stack privately, then let approved client stacks reach only 
 ## Quick path
 
 1. Create a Coolify **Service Stack** from this repository using `compose.coolify.yaml`.
-2. Add the required deployment secrets in Coolify and set `RAG_API_IMAGE_TAG` to a verified published version (see [Image publication, verification, and rollback](#image-publication-verification-and-rollback)); deploy without domains or port mappings.
+2. Add the required deployment secrets and matching immutable image references in Coolify (see [Image publication, verification, and rollback](#image-publication-verification-and-rollback)); deploy without domains or port mappings.
 3. Wait for `model-download` and `migrate` to complete successfully; llama.cpp and then the API start. The API must become ready.
 4. Enable **Connect to Predefined Network** on both the RAG and client service stacks. Put the Coolify-generated full API service hostname in the client stack's environment, for example `RAG_API_BASE_URL=http://rag-api-<resource-uuid>:8080`.
 
@@ -168,22 +168,36 @@ cosign verify \
   ghcr.io/jesusjbriceno/rag-api:develop-<sha>
 ```
 
-### Pin the image version
+For a digest pin, replace the tag image with the exact `digest_ref` for that repository from the same `publication-completion` record. Verify each API and operator digest separately:
 
-`compose.coolify.yaml` references `ghcr.io/jesusjbriceno/rag-api:${RAG_API_IMAGE_TAG}` and `ghcr.io/jesusjbriceno/rag-operator:${RAG_API_IMAGE_TAG}` with `pull_policy: always`. Set `RAG_API_IMAGE_TAG` in the Coolify deployment environment to one exact published version:
+```bash
+API_IMAGE="ghcr.io/jesusjbriceno/rag-api@sha256:<api-64-lowercase-hex>"
 
-- `v0.1.0-rc.1` — a release tag (pre-release for this foundation).
-- `develop-<sha>` — a develop pre-release, for testing only.
+cosign verify \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-identity "$IDENTITY" "$API_IMAGE"
+```
 
-Never use `latest`, an empty value, or a floating channel. Both services share the one tag, so the API and operator stay version-coordinated.
+### Pin an immutable image
+
+`compose.coolify.yaml` accepts only the two exact application repositories with `pull_policy: always`. Set both Coolify environment variables using one of these supported reference models:
+
+| Model | `RAG_API_IMAGE_REFERENCE` | `RAG_OPERATOR_IMAGE_REFERENCE` | Use when |
+| --- | --- | --- | --- |
+| Coordinated immutable tags | `:v0.1.0-rc.1` | `:v0.1.0-rc.1` | Normal deployment and rollback. The tags must match. |
+| Repository-specific digest pins | `@sha256:<api-64-lowercase-hex>` | `@sha256:<operator-64-lowercase-hex>` | Maximum pinning after recording and verifying both published digests. |
+
+For a develop pre-release, use the same `:develop-<40-lowercase-hex-sha>` suffix for both variables. Never use `latest`, an empty suffix, a floating channel, a malformed digest, a tag combined with a digest, or one tag reference with one digest reference. The validator rejects those forms and any repository other than the API and operator repositories above.
+
+**Happy path:** verify the selected release tag with cosign, set both suffixes to the same `:vX.Y.Z` value, and deploy. `pull_policy: always` pulls the pinned image; Coolify never falls back to a local build.
 
 ### Roll back
 
-1. Set `RAG_API_IMAGE_TAG` to the previous verified semver tag.
-2. Redeploy the stack.
+1. Verify the previous release tag with cosign and its required attestations.
+2. Set both image-reference variables to the same previous `:vX.Y.Z` suffix, then redeploy the stack.
 3. Confirm `GET /api/v1/health/ready` returns `200`.
 
-Rollback is a re-pull of an immutable digest: `pull_policy: always` fetches the previously verified tag, and a pull failure fails the deployment without falling back to a local build. To pin even harder, replace the tag with its digest (`image: ...@sha256:<digest>`) after verifying it with cosign.
+Rollback re-pulls the previously verified immutable tag. A pull failure fails deployment without falling back to a local build. For digest-pinned deployment, copy both repository-specific `digest_ref` values from the same durable `publication-completion` record, verify each with cosign, set each variable to its `@sha256:...` suffix, and redeploy. Confirm `GET /api/v1/health/ready` returns `200`.
 
 ## Out of scope
 

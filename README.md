@@ -5,7 +5,7 @@ This repository deploys the RAG API, PostgreSQL with pgvector, a private CPU-onl
 ## Quick path
 
 1. In Coolify, create a **Service Stack** from this repository and select `compose.coolify.yaml`.
-2. Add the deployment secrets listed in [Coolify delivery](docs/deployment/coolify.md#secret-inventory) and pin `RAG_API_IMAGE_TAG` to a verified published version; never upload this repository's `.env.example` as production configuration.
+2. Add the deployment secrets listed in [Coolify delivery](docs/deployment/coolify.md#secret-inventory) and the matching immutable image-reference suffixes described in [Pin an immutable image](docs/deployment/coolify.md#pin-an-immutable-image); never upload this repository's `.env.example` as production configuration.
 3. Deploy. Coolify starts PostgreSQL, downloads and verifies the immutable Qwen GGUF, applies the idempotent migration, then starts llama.cpp and the API.
 4. From a separate client stack, use Coolify's generated full API hostname on its predefined network. Do not create a domain or publish a port for this stack.
 
@@ -77,9 +77,9 @@ For `develop-<sha>` images, use `--certificate-identity "https://github.com/jesu
 
 ## Pin and roll back
 
-Production Compose pulls `ghcr.io/jesusjbriceno/rag-api` and `rag-operator` at one shared `RAG_API_IMAGE_TAG` with `pull_policy: always`. Pin it to an exact published version (for example `v0.1.0-rc.1`), never `latest` or a floating channel.
+Production Compose pulls only the exact `ghcr.io/jesusjbriceno/rag-api` and `ghcr.io/jesusjbriceno/rag-operator` repositories with `pull_policy: always`. Set `RAG_API_IMAGE_REFERENCE` and `RAG_OPERATOR_IMAGE_REFERENCE` to matching immutable tag suffixes (for example, `:v0.1.0-rc.1`) or to their verified repository-specific `@sha256:...` suffixes.
 
-To roll back, set `RAG_API_IMAGE_TAG` to the previous verified semver tag and redeploy: the stack re-pulls that immutable digest, and a pull failure never falls back to a local build. The full operator contract is in [the deployment guide](docs/deployment/coolify.md#image-publication-verification-and-rollback).
+To roll back, set both suffixes to the previous verified release tag and redeploy: the stack re-pulls the immutable image, and a pull failure never falls back to a local build. The full operator contract, including digest-pin verification, is in [the deployment guide](docs/deployment/coolify.md#image-publication-verification-and-rollback).
 
 ## Deployment checklist
 

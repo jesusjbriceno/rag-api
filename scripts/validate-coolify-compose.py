@@ -10,7 +10,7 @@ EXPECTED_SHA256 = "06507c7b42688469c4e7298b0a1e16deff06caf291cf0a5b278c308249c3e
 DOWNLOADER_IMAGE = "curlimages/curl@sha256:94e9e444bcba979c2ea12e27ae39bee4cd10bc7041a472c4727a558e213744e6"
 SERVER_IMAGE = "ghcr.io/ggml-org/llama.cpp@sha256:c005e79321f8e5731ec49a7f736aaeaac9465926c1e8f4c199c1d8a8996f26ef"
 
-# Production application images: one coordinated immutable tag across both repositories.
+# Production application images: exact repositories and immutable references only.
 API_IMAGE_REPOSITORY = "ghcr.io/jesusjbriceno/rag-api"
 OPERATOR_IMAGE_REPOSITORY = "ghcr.io/jesusjbriceno/rag-operator"
 APP_IMAGES = {
@@ -19,6 +19,7 @@ APP_IMAGES = {
 }
 # Immutable tags only: exact semver (vX.Y.Z[-prerelease]) or develop-<40-char-sha>. Never latest/floating.
 IMMUTABLE_TAG_PATTERN = re.compile(r"^(v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?|develop-[0-9a-f]{40})$")
+SHA256_DIGEST_PATTERN = re.compile(r"^sha256:[0-9a-f]{64}$")
 
 
 def split_image_reference(reference):
@@ -78,6 +79,8 @@ if any(argument not in command for argument in required_command):
 if services["llama-cpp"].get("gpus") or services["llama-cpp"].get("runtime"):
     raise SystemExit("llama-cpp must not request a GPU runtime.")
 
+app_reference_kinds = {}
+app_tags = {}
 for name, expected_repository in APP_IMAGES.items():
     service = services[name]
     if service.get("build"):
@@ -91,17 +94,29 @@ for name, expected_repository in APP_IMAGES.items():
             f"{name} must use the {expected_repository} repository; found {repository!r} (repository drift)."
         )
     if digest is not None:
-        raise SystemExit(f"{name} must reference a version tag, not a digest.")
-    if not tag or tag == "latest":
-        raise SystemExit(f"{name} image tag must not be empty or 'latest'.")
-    if not IMMUTABLE_TAG_PATTERN.fullmatch(tag):
-        raise SystemExit(
-            f"{name} image tag {tag!r} is not an immutable version tag (vX.Y.Z[-prerelease] or develop-<sha>)."
-        )
+        if tag:
+            raise SystemExit(f"{name} image reference must use either an immutable tag or a digest, not both.")
+        if not SHA256_DIGEST_PATTERN.fullmatch(digest):
+            raise SystemExit(f"{name} image digest must be sha256:<64 lowercase hex characters>.")
+        app_reference_kinds[name] = "digest"
+    else:
+        if not tag or tag == "latest":
+            raise SystemExit(f"{name} image tag must not be empty or 'latest'.")
+        if not IMMUTABLE_TAG_PATTERN.fullmatch(tag):
+            raise SystemExit(
+                f"{name} image tag {tag!r} is not an immutable version tag (vX.Y.Z[-prerelease] or develop-<sha>)."
+            )
+        app_reference_kinds[name] = "tag"
+        app_tags[name] = tag
     if service.get("pull_policy") != "always":
         raise SystemExit(
             f"{name} must set pull_policy: always so production pulls and never falls back to a local build."
         )
+
+if len(set(app_reference_kinds.values())) != 1:
+    raise SystemExit("api and migrate must both use immutable tags or both use repository-specific digests.")
+if app_reference_kinds["api"] == "tag" and len(set(app_tags.values())) != 1:
+    raise SystemExit("api and migrate must use the same immutable version tag.")
 
 api_environment = services["api"].get("environment", {})
 if api_environment.get("LlamaCpp__BaseUrl") != "http://llama-cpp:8080/":
