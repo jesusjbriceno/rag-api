@@ -34,10 +34,28 @@ write_proof() {
         identity: "https://github.com/example/repo/.github/workflows/ci-develop.yml@refs/heads/develop",
         issuer: "https://token.actions.githubusercontent.com"
       },
-      digest_ref: ($image + "@" + $digest),
-      final_tag_ref: ($image + ":develop-0123456789abcdef0123456789abcdef01234567"),
-      final_tag_digest: $digest,
-      attachments: {signature: "attached", spdx: "attached", slsa: "attached"}
+      index: {
+        digest_ref: ($image + "@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"),
+        final_tag_ref: ($image + ":develop-0123456789abcdef0123456789abcdef01234567"),
+        final_tag_digest: "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        attachments: {signature: "attached", slsa: "attached"}
+      },
+      platforms: [
+        {
+          architecture: "amd64",
+          digest_ref: ($image + "@" + $digest),
+          tag_ref: ($image + ":develop-0123456789abcdef0123456789abcdef01234567-amd64"),
+          tag_digest: $digest,
+          attachments: {signature: "attached", spdx: "attached", slsa: "attached"}
+        },
+        {
+          architecture: "arm64",
+          digest_ref: ($image + "@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"),
+          tag_ref: ($image + ":develop-0123456789abcdef0123456789abcdef01234567-arm64"),
+          tag_digest: "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          attachments: {signature: "attached", spdx: "attached", slsa: "attached"}
+        }
+      ]
     }
   '
 }
@@ -52,18 +70,18 @@ run_remote() {
       return 0
       ;;
     failed)
-      [[ "$1" == async-spdx-sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa ]] || return 0
+      [[ "$1" == async-spdx-platform-sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa ]] || return 0
       printf '%s\n' 'verification did not match the expected identity' >&2
       return 1
       ;;
     unknown-timeout)
-      if [[ "$1" == async-slsa-sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa ]]; then
+      if [[ "$1" == async-slsa-platform-sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa ]]; then
         return 124
       fi
       return 0
       ;;
     unknown-access)
-      [[ "$1" == async-signature-sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa ]] || return 0
+      [[ "$1" == async-signature-platform-sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa ]] || return 0
       printf '%s\n' 'UNAUTHORIZED: authentication required' >&2
       return 1
       ;;

@@ -128,15 +128,17 @@ Three least-privilege GitHub Actions workflows publish only verified images.
 | `ci-develop.yml` | Push to `develop` | `develop-<40-char-sha>` pre-release images after SonarQube, Trivy, sign, and attest. |
 | `ci-release.yml` | Semver tag push `v*` | Immutable `vX.Y.Z` images plus a GitHub Release; `-rc.N` tags are pre-releases. |
 
-Every image is scanned with Trivy (HIGH/CRITICAL blocks publication), keyless-signed with cosign, and carries a SPDX SBOM and SLSA v1 provenance attestation. The final tag is created only after scanning, signing, and attachment; an existing tag is never moved to a different digest.
+Every `linux/amd64` and native `linux/arm64` variant is scanned with Trivy (HIGH/CRITICAL blocks publication), keyless-signed with cosign, and carries a SPDX SBOM and SLSA v1 provenance attestation. Only after both variants pass does publication assemble a signed multi-platform OCI index with SLSA provenance under the ordinary immutable tag. An existing architecture tag or ordinary index tag is never moved to a different digest.
+
+The ordinary `vX.Y.Z` or `develop-<sha>` reference is the deployment contract. Its `-amd64` and `-arm64` variants exist for traceability and troubleshooting only. Publication uses native GitHub-hosted AMD64 and ARM64 runners; it does not use QEMU or deploy with a forced platform.
 
 ### Publication completion record
 
-A visible GHCR tag is not publication-completion evidence. Each successful dual-image finalization writes one durable GitHub Deployment record with `environment` and `task` both set to `publication-completion`; its deployment ID is the completion-marker identity. The marker payload records the source revision, workflow run ID and URL, final tag, both immutable `image@sha256:...` references, both final tag resolutions, and the `attached` outcomes for signature, SPDX, and SLSA.
+A visible GHCR tag is not publication-completion evidence. Each successful dual-image finalization writes one durable GitHub Deployment record with `environment` and `task` both set to `publication-completion`; its deployment ID is the completion-marker identity. The marker payload records the source revision, workflow run ID and URL, both ordinary multi-platform index references and digests, and each AMD64/ARM64 digest plus its architecture tag. It records attached signature/SPDX/SLSA evidence for platform manifests and signature/SLSA evidence for the index.
 
 The marker is written only after both API and operator final tags resolve to their respective immutable digests. Re-runs for the same source and image pair reuse the existing successful marker; records are retained as publication evidence and are not pruned with GHCR tags or workflow artifacts. `ci-develop.yml` never creates a GitHub Release. The release workflow creates its GitHub Release only after its completion marker exists.
 
-Signature, SPDX, and SLSA verification runs afterwards in a separate read-only verification job. Its check run reports `verified`, `failed`, or `unknown`; it has no permission to write packages, tags, releases, or deployment markers, so its result cannot alter completion. A failed or unknown verification result must be investigated before deployment even though it does not rewrite the durable publication record.
+Signature, SPDX, and SLSA verification runs afterwards in a separate read-only verification job. It verifies signatures and SLSA for each index plus signatures, SPDX, and SLSA for all four platform manifests. Its check run reports `verified`, `failed`, or `unknown`; it has no permission to write packages, tags, releases, or deployment markers, so its result cannot alter completion. A failed or unknown verification result must be investigated before deployment even though it does not rewrite the durable publication record.
 
 ### Verify signatures and SBOM
 
@@ -168,7 +170,7 @@ cosign verify \
   ghcr.io/jesusjbriceno/rag-api:develop-<sha>
 ```
 
-For a digest pin, replace the tag image with the exact `digest_ref` for that repository from the same `publication-completion` record. Verify each API and operator digest separately:
+For a digest pin, use the exact ordinary multi-platform index `digest_ref` for each repository from the same `publication-completion` record. Verify each index, then inspect it for both deployable platforms:
 
 ```bash
 API_IMAGE="ghcr.io/jesusjbriceno/rag-api@sha256:<api-64-lowercase-hex>"
@@ -176,7 +178,11 @@ API_IMAGE="ghcr.io/jesusjbriceno/rag-api@sha256:<api-64-lowercase-hex>"
 cosign verify \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   --certificate-identity "$IDENTITY" "$API_IMAGE"
+
+docker buildx imagetools inspect "$API_IMAGE"
 ```
+
+The manifest output must list `linux/amd64` and `linux/arm64`. Use the marker's platform `digest_ref` values with cosign when troubleshooting one architecture; do not set a Compose `platform` override.
 
 ### Pin an immutable image
 
@@ -185,11 +191,11 @@ cosign verify \
 | Model | `RAG_API_IMAGE_REFERENCE` | `RAG_OPERATOR_IMAGE_REFERENCE` | Use when |
 | --- | --- | --- | --- |
 | Coordinated immutable tags | `:v0.1.0-rc.1` | `:v0.1.0-rc.1` | Normal deployment and rollback. The tags must match. |
-| Repository-specific digest pins | `@sha256:<api-64-lowercase-hex>` | `@sha256:<operator-64-lowercase-hex>` | Maximum pinning after recording and verifying both published digests. |
+| Repository-specific index digest pins | `@sha256:<api-index-64-lowercase-hex>` | `@sha256:<operator-index-64-lowercase-hex>` | Maximum pinning after recording and verifying both published multi-platform indexes. |
 
 For a develop pre-release, use the same `:develop-<40-lowercase-hex-sha>` suffix for both variables. Never use `latest`, an empty suffix, a floating channel, a malformed digest, a tag combined with a digest, or one tag reference with one digest reference. The validator rejects those forms and any repository other than the API and operator repositories above.
 
-**Happy path:** verify the selected release tag with cosign, set both suffixes to the same `:vX.Y.Z` value, and deploy. `pull_policy: always` pulls the pinned image; Coolify never falls back to a local build.
+**Dokploy ARM64 happy path:** verify each ordinary release or develop tag with cosign, confirm each manifest lists `linux/amd64` and `linux/arm64`, then set both suffixes to their repository-specific **index** `@sha256:...` values from one completion marker. Deploy the unchanged pull-only Compose stack. `pull_policy: always` pulls the index and Docker selects ARM64 automatically; Dokploy never falls back to a local build.
 
 ### Roll back
 
@@ -197,7 +203,7 @@ For a develop pre-release, use the same `:develop-<40-lowercase-hex-sha>` suffix
 2. Set both image-reference variables to the same previous `:vX.Y.Z` suffix, then redeploy the stack.
 3. Confirm `GET /api/v1/health/ready` returns `200`.
 
-Rollback re-pulls the previously verified immutable tag. A pull failure fails deployment without falling back to a local build. For digest-pinned deployment, copy both repository-specific `digest_ref` values from the same durable `publication-completion` record, verify each with cosign, set each variable to its `@sha256:...` suffix, and redeploy. Confirm `GET /api/v1/health/ready` returns `200`.
+Rollback re-pulls the previously verified immutable tag. A pull failure fails deployment without falling back to a local build. For digest-pinned deployment, copy both ordinary multi-platform index `digest_ref` values from the same durable `publication-completion` record, verify and inspect each index, set each variable to its `@sha256:...` suffix, and redeploy. Confirm `GET /api/v1/health/ready` returns `200`.
 
 ## Out of scope
 

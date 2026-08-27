@@ -56,7 +56,7 @@ Three least-privilege GitHub Actions workflows publish only verified images to G
 | `ci-develop.yml` | Push to `develop` | Build/test/SonarQube, then publishes `develop-<sha>` pre-release images. |
 | `ci-release.yml` | Semver tag `v*` push | Build/test, then publishes immutable `vX.Y.Z` images and creates a GitHub Release (`-rc.N` tags are pre-releases). |
 
-Every image is Trivy-scanned (HIGH/CRITICAL blocks publication), keyless-signed with cosign, and carries a SPDX SBOM plus SLSA provenance attestation. Final tags are created only after signing and verification, and an existing tag is never moved to a different digest.
+Every `linux/amd64` and native `linux/arm64` image is independently Trivy-scanned (HIGH/CRITICAL blocks publication), keyless-signed with cosign, and carries a SPDX SBOM plus SLSA provenance attestation. After both platform jobs pass, the ordinary immutable tag becomes a signed multi-platform OCI index with SLSA provenance. The `-amd64` and `-arm64` suffix tags are traceability references; deployments use the ordinary tag or its index digest.
 
 Verify a release image before deploying it:
 
@@ -77,7 +77,7 @@ For `develop-<sha>` images, use `--certificate-identity "https://github.com/jesu
 
 ## Pin and roll back
 
-Production Compose pulls only the exact `ghcr.io/jesusjbriceno/rag-api` and `ghcr.io/jesusjbriceno/rag-operator` repositories with `pull_policy: always`. Set `RAG_API_IMAGE_REFERENCE` and `RAG_OPERATOR_IMAGE_REFERENCE` to matching immutable tag suffixes (for example, `:v0.1.0-rc.1`) or to their verified repository-specific `@sha256:...` suffixes.
+Production Compose pulls only the exact `ghcr.io/jesusjbriceno/rag-api` and `ghcr.io/jesusjbriceno/rag-operator` repositories with `pull_policy: always`. Set `RAG_API_IMAGE_REFERENCE` and `RAG_OPERATOR_IMAGE_REFERENCE` to matching ordinary immutable tag suffixes (for example, `:v0.1.0-rc.1`) or to each verified multi-platform index `@sha256:...` suffix. Docker selects `linux/arm64` automatically on an ARM64 Dokploy host.
 
 To roll back, set both suffixes to the previous verified release tag and redeploy: the stack re-pulls the immutable image, and a pull failure never falls back to a local build. The full operator contract, including digest-pin verification, is in [the deployment guide](docs/deployment/coolify.md#image-publication-verification-and-rollback).
 
