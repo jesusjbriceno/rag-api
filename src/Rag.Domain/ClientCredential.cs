@@ -20,7 +20,8 @@ public sealed class ClientCredential
         byte[] secretSalt,
         int hashVersion,
         DateTimeOffset createdAt,
-        DateTimeOffset? expiresAt = null)
+        DateTimeOffset? expiresAt = null,
+        string? description = null)
     {
         if (id == Guid.Empty || serviceClientId == Guid.Empty)
         {
@@ -50,6 +51,7 @@ public sealed class ClientCredential
         HashVersion = hashVersion;
         CreatedAt = createdAt;
         ExpiresAt = expiresAt;
+        Description = NormalizeDescription(description);
         Version = 1;
         Status = CredentialStatus.Active;
     }
@@ -76,6 +78,10 @@ public sealed class ClientCredential
 
     public DateTimeOffset? RevokedAt { get; private set; }
 
+    public string? Description { get; private set; }
+
+    public DateTimeOffset? LastRotatedAt { get; private set; }
+
     public bool IsActiveAt(DateTimeOffset now) =>
         Status == CredentialStatus.Active && (ExpiresAt is null || ExpiresAt > now);
 
@@ -95,6 +101,7 @@ public sealed class ClientCredential
         SecretSalt = secretSalt;
         HashVersion = hashVersion;
         Version = checked(Version + 1);
+        LastRotatedAt = now;
     }
 
     public void Revoke(DateTimeOffset now)
@@ -112,4 +119,20 @@ public sealed class ClientCredential
     public static bool IsValidKeyId(string? value) =>
         value is { Length: 27 } && value.All(character =>
             char.IsAsciiLetterOrDigit(character) || character is '-' or '_');
+
+    private static string? NormalizeDescription(string? description)
+    {
+        if (string.IsNullOrWhiteSpace(description))
+        {
+            return null;
+        }
+
+        var trimmed = description.Trim();
+        if (trimmed.Length > 500)
+        {
+            throw new ArgumentException("A credential description must not exceed 500 characters.", nameof(description));
+        }
+
+        return trimmed;
+    }
 }
