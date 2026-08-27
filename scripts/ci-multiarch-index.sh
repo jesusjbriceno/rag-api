@@ -16,14 +16,18 @@ assert_multiarch_manifest() {
   local amd64_digest="$2"
   local arm64_digest="$3"
 
-  jq -e \
+  if jq -e \
     --arg amd64_digest "${amd64_digest}" \
     --arg arm64_digest "${arm64_digest}" '
       .manifests | type == "array"
       and length == 2
       and ([.[] | select(.platform.os == "linux" and .platform.architecture == "amd64") | .digest] == [$amd64_digest])
       and ([.[] | select(.platform.os == "linux" and .platform.architecture == "arm64") | .digest] == [$arm64_digest])
-    ' <<<"${manifest}" >/dev/null || fail 'multi-platform index must contain exactly the expected linux/amd64 and linux/arm64 manifests'
+    ' <<<"${manifest}" >/dev/null; then
+    return 0
+  fi
+  printf '%s\n' 'multi-architecture publication error: multi-platform index must contain exactly the expected linux/amd64 and linux/arm64 manifests' >&2
+  return 1
 }
 
 resolve_platform_digest() {
