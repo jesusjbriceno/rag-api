@@ -33,10 +33,28 @@ write_proof() {
         identity: "https://github.com/example/repo/.github/workflows/ci-develop.yml@refs/heads/develop",
         issuer: "https://token.actions.githubusercontent.com"
       },
-      digest_ref: ($image + "@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
-      final_tag_ref: ($image + ":develop-0123456789abcdef0123456789abcdef01234567"),
-      final_tag_digest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-      attachments: {signature: "attached", spdx: "attached", slsa: "attached"}
+      index: {
+        digest_ref: ($image + "@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"),
+        final_tag_ref: ($image + ":develop-0123456789abcdef0123456789abcdef01234567"),
+        final_tag_digest: "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        attachments: {signature: "attached", slsa: "attached"}
+      },
+      platforms: [
+        {
+          architecture: "amd64",
+          digest_ref: ($image + "@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+          tag_ref: ($image + ":develop-0123456789abcdef0123456789abcdef01234567-amd64"),
+          tag_digest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          attachments: {signature: "attached", spdx: "attached", slsa: "attached"}
+        },
+        {
+          architecture: "arm64",
+          digest_ref: ($image + "@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
+          tag_ref: ($image + ":develop-0123456789abcdef0123456789abcdef01234567-arm64"),
+          tag_digest: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          attachments: {signature: "attached", spdx: "attached", slsa: "attached"}
+        }
+      ]
     }
   '
 }
@@ -49,8 +67,8 @@ assert_equals "${payload_one}" "${payload_two}" 'marker payload idempotency'
 jq -e '
   .source_revision == "0123456789abcdef0123456789abcdef01234567"
   and .workflow.run_id == "123"
-  and ([.images[].digest_ref] | length == 2)
-  and all(.images[]; .attachments == {signature:"attached", spdx:"attached", slsa:"attached"})
+  and ([.images[].platforms[]] | length == 4)
+  and all(.images[]; .index.attachments == {signature:"attached", slsa:"attached"})
 ' <<<"${payload_one}" >/dev/null || fail 'marker payload content is incomplete'
 
 existing_deployment="$(jq -nc --argjson payload "${payload_one}" '{id: 42, payload: $payload}')"
@@ -73,11 +91,11 @@ if grep -q -- '-X POST' "${api_calls}"; then
 fi
 unset -f gh
 
-jq '.final_tag_digest = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"' \
+jq '.platforms[1].tag_digest = "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"' \
   "${proof_dir}/operator.json" >"${proof_dir}/operator-invalid.json"
 mv "${proof_dir}/operator-invalid.json" "${proof_dir}/operator.json"
 if (build_completion_payload "${proof_dir}" >/dev/null 2>&1); then
-  fail 'marker payload accepted a final tag digest different from its image digest'
+  fail 'marker payload accepted a platform tag digest different from its image digest'
 fi
 
 write_proof operator ghcr.io/example/rag-operator >"${proof_dir}/operator.json"

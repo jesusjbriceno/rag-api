@@ -74,7 +74,7 @@ record_check() {
 
 verify_publication() {
   local proof_directory="$1"
-  local payload identity issuer image result
+  local payload identity issuer verification_kind image result
   local -a results=()
 
   exec 3>&2
@@ -86,17 +86,19 @@ verify_publication() {
   else
     identity="$(jq -r '.signature.identity' <<<"${payload}")"
     issuer="$(jq -r '.signature.issuer' <<<"${payload}")"
-    while IFS= read -r image; do
-      results+=("$(verification_result "signature-${image##*@}" cosign verify \
+    while IFS=$'\t' read -r verification_kind image; do
+      results+=("$(verification_result "signature-${verification_kind}-${image##*@}" cosign verify \
         --certificate-oidc-issuer "${issuer}" \
         --certificate-identity "${identity}" "${image}")")
-      results+=("$(verification_result "spdx-${image##*@}" cosign verify-attestation --type spdxjson \
+      if [[ "${verification_kind}" == platform ]]; then
+        results+=("$(verification_result "spdx-${verification_kind}-${image##*@}" cosign verify-attestation --type spdxjson \
+          --certificate-oidc-issuer "${issuer}" \
+          --certificate-identity "${identity}" "${image}")")
+      fi
+      results+=("$(verification_result "slsa-${verification_kind}-${image##*@}" cosign verify-attestation --type slsaprovenance1 \
         --certificate-oidc-issuer "${issuer}" \
         --certificate-identity "${identity}" "${image}")")
-      results+=("$(verification_result "slsa-${image##*@}" cosign verify-attestation --type slsaprovenance1 \
-        --certificate-oidc-issuer "${issuer}" \
-        --certificate-identity "${identity}" "${image}")")
-    done < <(jq -r '.images[].digest_ref' <<<"${payload}")
+    done < <(jq -r '.images[] | ("index\t" + .index.digest_ref), (.platforms[] | "platform\t" + .digest_ref)' <<<"${payload}")
     result="$(classify_verification_results "${results[@]}")"
   fi
 

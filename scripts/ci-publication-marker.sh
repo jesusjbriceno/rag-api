@@ -11,7 +11,7 @@ read_payload() {
   local payload="$1"
   jq -ce '
     type == "object"
-    and .schema_version == 1
+    and .schema_version == 2
     and (.source_revision | type == "string" and test("^[0-9a-f]{40}$"))
     and (.workflow | type == "object"
       and (.run_id | type == "string" and test("^[0-9]+$"))
@@ -23,11 +23,20 @@ read_payload() {
     and (.images | type == "array" and length == 2
       and ([.[].component] | sort) == ["api", "operator"]
       and all(.[];
-        (.digest_ref | type == "string" and test("@sha256:[0-9a-f]{64}$"))
-        and (.final_tag_ref | type == "string" and contains(":"))
-        and (.final_tag_digest | type == "string" and test("^sha256:[0-9a-f]{64}$"))
-        and (. as $image | ($image.digest_ref | split("@")[1]) == $image.final_tag_digest)
-        and .attachments == {"signature":"attached", "spdx":"attached", "slsa":"attached"}))
+        (.index | type == "object"
+          and (.digest_ref | type == "string" and test("@sha256:[0-9a-f]{64}$"))
+          and (.final_tag_ref | type == "string" and contains(":"))
+          and (.final_tag_digest | type == "string" and test("^sha256:[0-9a-f]{64}$"))
+          and (. as $index | ($index.digest_ref | split("@")[1]) == $index.final_tag_digest)
+          and .attachments == {"signature":"attached", "slsa":"attached"})
+        and (.platforms | type == "array" and length == 2
+          and ([.[].architecture] | sort) == ["amd64", "arm64"]
+          and all(.[];
+            (.digest_ref | type == "string" and test("@sha256:[0-9a-f]{64}$"))
+            and (.tag_ref | type == "string" and contains(":"))
+            and (.tag_digest | type == "string" and test("^sha256:[0-9a-f]{64}$"))
+            and (. as $platform | ($platform.digest_ref | split("@")[1]) == $platform.tag_digest)
+            and .attachments == {"signature":"attached", "spdx":"attached", "slsa":"attached"}))))
   ' <<<"${payload}" >/dev/null
 }
 
@@ -47,13 +56,13 @@ build_completion_payload() {
           or $api_proof.publication_tag != $operator_proof.publication_tag
           or $api_proof.signature != $operator_proof.signature) then error("proof metadata mismatch") else . end
     | {
-        schema_version: 1,
+        schema_version: 2,
         source_revision: $api_proof.source_revision,
         workflow: $api_proof.workflow,
         publication_tag: $api_proof.publication_tag,
         signature: $api_proof.signature,
         images: [$api_proof, $operator_proof]
-          | map({component, digest_ref, final_tag_ref, final_tag_digest, attachments})
+          | map({component, index, platforms})
           | sort_by(.component)
       }
   ')"
@@ -88,14 +97,14 @@ record_completion_marker() {
     statuses="$(gh api --paginate "/repos/${repository}/deployments/${existing_id}/statuses?per_page=100" | jq -sc 'add')"
     jq -e 'any(.[]; .state == "success")' <<<"${statuses}" >/dev/null || fail "existing completion marker ${existing_id} is not successful"
     marker_id="${existing_id}"
-    printf 'Publication completion marker %s already records this source and both image digests.\n' "${marker_id}"
+    printf 'Publication completion marker %s already records this source, both multi-platform indexes, and all platform digests.\n' "${marker_id}"
   else
     request="$(jq -n --arg sha "${GITHUB_SHA}" --argjson payload "${expected_payload}" '
       {
         ref: $sha,
         task: "publication-completion",
         environment: "publication-completion",
-        description: "Durable dual-image publication completion marker",
+        description: "Durable dual-image multi-architecture publication completion marker",
         auto_merge: false,
         required_contexts: [],
         transient_environment: false,
@@ -109,7 +118,7 @@ record_completion_marker() {
     gh api -X POST "/repos/${repository}/deployments/${marker_id}/statuses" \
       -f state=success \
       -f environment=publication-completion \
-      -f description='Both immutable final tags resolved to their intended digests.' \
+       -f description='Both immutable multi-platform tags resolved to their intended indexes.' \
       -F auto_inactive=false >/dev/null
     printf 'Created publication completion marker %s.\n' "${marker_id}"
   fi
