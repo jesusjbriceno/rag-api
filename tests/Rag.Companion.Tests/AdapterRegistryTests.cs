@@ -1,4 +1,5 @@
 using Rag.Companion.Adapters;
+using Rag.Companion.LibreOffice;
 
 namespace Rag.Companion.Tests;
 
@@ -112,6 +113,16 @@ public sealed class AdapterRegistryTests : IDisposable
         };
         var ex = Assert.Throws<ExtractionException>(() => AdapterRegistry.SerializeIngestionPayload(overLimit));
         Assert.Equal(ExtractionErrorCodes.ExtractedTextTooLarge, ex.ErrorCode);
+    }
+
+    [Fact]
+    public async Task CreateDefault_registers_legacy_doc_adapter()
+    {
+        var registry = AdapterRegistry.CreateDefault(new LibreOfficeRunner("soffice.com"));
+        var path = Path.Combine(_dir, "invalid.doc");
+        await File.WriteAllTextAsync(path, "not an OLE document");
+        var error = await Assert.ThrowsAsync<ExtractionException>(() => registry.ExtractNormalizedTextAsync(path));
+        Assert.Equal(ExtractionErrorCodes.ExtractionFailed, error.ErrorCode);
     }
 
     private static void TryDelete(string path)

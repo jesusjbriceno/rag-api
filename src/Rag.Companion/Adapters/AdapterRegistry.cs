@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using Rag.Companion.LibreOffice;
 
 namespace Rag.Companion.Adapters;
 
@@ -24,6 +25,19 @@ public sealed class AdapterRegistry
     {
         ArgumentNullException.ThrowIfNull(adapters);
         _adapters = new Dictionary<string, ITextAdapter>(adapters, StringComparer.OrdinalIgnoreCase);
+    }
+
+    public static AdapterRegistry CreateDefault(LibreOfficeRunner runner)
+    {
+        ArgumentNullException.ThrowIfNull(runner);
+        return new AdapterRegistry(new Dictionary<string, ITextAdapter>(StringComparer.OrdinalIgnoreCase)
+        {
+            [".txt"] = new TxtAdapter(),
+            [".md"] = new MarkdownAdapter(),
+            [".docx"] = new DocxAdapter(),
+            [".pdf"] = new PdfAdapter(),
+            [".doc"] = new DocAdapter(runner),
+        });
     }
 
     /// <summary>Dispatches by extension, extracts, normalizes, and returns the 1 MiB-capped UTF-8 text.</summary>
