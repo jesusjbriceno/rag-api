@@ -32,15 +32,16 @@ auto-chain+feature-branch-chain; tracker `feat/import-companion` (draft) → `ma
 - [x] 4.3 `AdapterRegistry.CreateDefault` + LO wiring; factory + Doc happy-path. RED: managed-only when no LO; full set when LO present; wiring closes.
 
 ## 5 | PR#4 | `--filter Ingestion`
-- [ ] 5.1 `Ingestion/IngestionClient.cs` (token exchange; JWT cache; SHA-256 normalized UTF-8 ⇒ `external_reference`). RED: same normalized text⇒same ref.
-- [ ] 5.2 `200` dup=null op (no poll); `202` polls `pending|running` to terminal. RED: non-null op+`200` closes; null-op `200` no poll; `202` polls terminal.
-- [ ] 5.3 `Ingestion/RetryPolicy.cs` (3 attempts; exp 1s/2s/4s jittered; transient-only). RED: 4th impossible; `400`/`401`/`404` not retried.
-- [ ] 5.4 Per-file failure recorder (structured log w/ `errorCode`; no paths/creds). RED: scrubber asserts no path/secret.
+- [x] 5.1 `Ingestion/IngestionClient.cs` (token exchange; JWT cache; SHA-256 normalized UTF-8 ⇒ `external_reference`). RED: same normalized text⇒same ref.
+- [x] 5.2 `200` dup=null op (no poll); `202` polls `pending|running` to terminal. RED: non-null op+`200` closes; null-op `200` no poll; `202` polls terminal.
+- [x] 5.3 `Ingestion/RetryPolicy.cs` (3 attempts; exp 1s/2s/4s jittered; transient-only). RED: 4th impossible; `400`/`401`/`404` not retried.
+- [x] 5.4 Per-file failure recorder (structured log w/ `errorCode`; no paths/creds). RED: scrubber asserts no path/secret.
+- NOTE: unit 5 landed at 989 changed lines (> 800-line session budget). Cohesive re-slice into 5A (`IngestionClient`, 5.1+5.2) and 5B (`RetryPolicy`+`FailureRecorder`, 5.3+5.4) or maintainer size:exception required; native ledger flagged `changed_line_budget_exceeded` and now needs a maintainer reset.
 
 ## 6 | PR#5 | ci-pr.yml+`companion-bff-smoke.sh`
-- [ ] 6.1 `Host/Program.cs` (`run --config <path>`; non-zero exit on terminal fail). RED: invalid config exits non-zero, no secret leakage.
-- [ ] 6.2 Modify `.github/workflows/ci-pr.yml`: Windows job (LO 26.8 x64 verify; `dotnet test Rag.sln`; win-x64 publish; integrity; SBOM+notices); no new workflow.
-- [ ] 6.3 Modify `.github/workflows/ci-release.yml`: PR checks; BFF lease/expiry/terminal smoke; 5-format smoke; LO verify; integrity/SBOM pre-attach.
-- [ ] 6.4 `tests/fixtures/import/manifest.json` + 5 fixtures (txt/md/docx/pdf/doc). RED: manifest SHA-256 matches every fixture.
-- [ ] 6.5 `docs/historical-import-companion.md` (install; LO prereq; license; operation; rollback). RED: links resolve; deps listed.
-- [ ] 6.6 BFF gate `scripts/companion-bff-smoke.sh` (lease/event; `200`/dup⇒`replayed:true`/regressed⇒`409`/bad HMAC⇒`401`; tag pre-attach). RED: CI fails on BFF down/sig diverge.
+- [x] 6.1 `Host/Program.cs` (`run --config <path>`; non-zero exit on terminal fail). RED: invalid config exits non-zero, no secret leakage.
+- [x] 6.2 Modify `.github/workflows/ci-pr.yml`: Windows job (LO 26.8 x64 verify; `dotnet test Rag.sln`; win-x64 publish; integrity; SBOM+notices); no new workflow.
+- [x] 6.3 Modify `.github/workflows/ci-release.yml`: PR checks; BFF lease/expiry/terminal smoke; 5-format smoke; LO verify; integrity/SBOM pre-attach.
+- [x] 6.4 `tests/fixtures/import/manifest.json` + 5 fixtures (txt/md/docx/pdf/doc). RED: manifest SHA-256 matches every fixture.
+- [x] 6.5 `docs/historical-import-companion.md` (install; LO prereq; license; operation; rollback). RED: links resolve; deps listed.
+- [x] 6.6 BFF gate `scripts/companion-bff-smoke.sh` (lease/event; `200`/dup⇒`replayed:true`/regressed⇒`409`/bad HMAC⇒`401`; tag pre-attach). RED: CI fails on BFF down/sig diverge.

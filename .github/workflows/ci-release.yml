@@ -530,17 +530,220 @@ jobs:
           prune_staging "rag-api"
           prune_staging "rag-operator"
 
+  # --- Companion release gates ---
+  # The companion is a win-x64 self-contained CLI. Before any tag asset is
+  # attached, the workflow proves: PR-equivalent Windows checks, the pinned
+  # LibreOffice version, the live BFF companion contract, a clean-machine
+  # 5-format smoke, and executable/ZIP/SHA-256 integrity with an SBOM and notices.
+
+  companion:
+    name: Build companion (win-x64)
+    needs:
+      - validate
+    runs-on: windows-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@eef61447b9ff4aafe5dcd4e0bbf5d482be7e7871 # v4.2.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
+        with:
+          global-json-file: global.json
+
+      # Pinned LibreOffice 26.8 x64. Re-verify the URL and add a SHA-256
+      # checksum before merge.
+      - name: Provision LibreOffice 26.8 x64
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $url = 'https://download.documentfoundation.org/libreoffice/stable/26.8.0/win/x86_64/LibreOffice_26.8.0_Win_x86-64.msi'
+          $msi = Join-Path $env:RUNNER_TEMP 'LibreOffice_26.8.0.msi'
+          Invoke-WebRequest -Uri $url -OutFile $msi
+          Start-Process msiexec.exe -ArgumentList @('/i', $msi, '/qn', '/norestart') -Wait
+
+      - name: Verify LibreOffice version
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $soffice = 'C:\Program Files\LibreOffice\program\soffice.com'
+          if (-not (Test-Path $soffice)) { throw "soffice.com not found at $soffice" }
+          $version = & $soffice --version
+          Write-Host "LibreOffice version: $version"
+          if ($version -notmatch '26\.8') { throw "Expected LibreOffice 26.8 x64, got: $version" }
+
+      - name: Test companion
+        run: dotnet test tests/Rag.Companion.Tests/Rag.Companion.Tests.csproj --configuration Release
+
+      - name: Publish companion (win-x64, self-contained, single-file)
+        run: dotnet publish src/Rag.Companion/Rag.Companion.csproj --configuration Release --runtime win-x64 --self-contained true -p:PublishSingleFile=true -p:PublishTrimmed=false -o "$env:RUNNER_TEMP\publish"
+
+      - name: Emit SBOM and third-party notices
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          dotnet tool install --global CycloneDX --version 3.1.0
+          dotnet CycloneDX src/Rag.Companion/Rag.Companion.csproj -o "$env:RUNNER_TEMP\sbom"
+          $notices = @"
+          Rag.Companion third-party notices
+
+          DocumentFormat.OpenXml 3.5.1 - MIT - https://github.com/dotnet/Open-XML-SDK
+          PdfPig 0.1.16 - Apache-2.0 - https://github.com/UglyToad/PdfPig
+          LibreOffice 26.8 x64 - MPL-2.0 - https://www.libreoffice.org/about-us/licenses/
+          .NET 10 - MIT - https://dot.net
+          "@
+          Set-Content -Path "$env:RUNNER_TEMP\publish\THIRD-PARTY-NOTICES.txt" -Value $notices -Encoding UTF8
+
+      - name: Verify executable and package integrity
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $publish = "$env:RUNNER_TEMP\publish"
+          $exe = Join-Path $publish 'Rag.Companion.exe'
+          if (-not (Test-Path $exe)) { throw 'Rag.Companion.exe is missing from the publish output.' }
+          $zip = "$env:RUNNER_TEMP\Rag.Companion-win-x64.zip"
+          Compress-Archive -Path "$publish\*" -DestinationPath $zip
+          $zipHash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          $exeHash = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          Write-Host "ZIP SHA-256: $zipHash"
+          Write-Host "EXE SHA-256: $exeHash"
+          "ZIP SHA-256: $zipHash" | Out-File -FilePath "$env:RUNNER_TEMP\SHA256SUMS.txt" -Encoding UTF8
+          "EXE SHA-256: $exeHash" | Add-Content -Path "$env:RUNNER_TEMP\SHA256SUMS.txt"
+
+      - name: Upload companion package and evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: rag-companion-win-x64
+          path: |
+            ${{ runner.temp }}/Rag.Companion-win-x64.zip
+            ${{ runner.temp }}/SHA256SUMS.txt
+            ${{ runner.temp }}/sbom/**
+          if-no-files-found: error
+          retention-days: 1
+
+  companion-bff-smoke:
+    name: Verify live BFF companion contract
+    needs:
+      - validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    env:
+      COMPANION_BFF_URL: ${{ secrets.COMPANION_BFF_URL }}
+      COMPANION_ID: ${{ secrets.COMPANION_ID }}
+      COMPANION_KEY_ID: ${{ secrets.COMPANION_KEY_ID }}
+      COMPANION_SECRET: ${{ secrets.COMPANION_SECRET }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@eef61447b9ff4aafe5dcd4e0bbf5d482be7e7871 # v4.2.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Run companion BFF contract smoke
+        run: bash scripts/companion-bff-smoke.sh
+
+  companion-format-smoke:
+    name: Clean-machine 5-format smoke
+    needs:
+      - companion
+    runs-on: windows-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      COMPANION_BFF_URL: ${{ secrets.COMPANION_BFF_URL }}
+      COMPANION_ID: ${{ secrets.COMPANION_ID }}
+      COMPANION_KEY_ID: ${{ secrets.COMPANION_KEY_ID }}
+      COMPANION_SECRET: ${{ secrets.COMPANION_SECRET }}
+      COMPANION_API_BASE_URL: ${{ secrets.COMPANION_API_BASE_URL }}
+      COMPANION_SERVICE_CLIENT_KEY_ID: ${{ secrets.COMPANION_SERVICE_CLIENT_KEY_ID }}
+      COMPANION_SERVICE_CLIENT_SECRET: ${{ secrets.COMPANION_SERVICE_CLIENT_SECRET }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@eef61447b9ff4aafe5dcd4e0bbf5d482be7e7871 # v4.2.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Provision LibreOffice 26.8 x64
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $url = 'https://download.documentfoundation.org/libreoffice/stable/26.8.0/win/x86_64/LibreOffice_26.8.0_Win_x86-64.msi'
+          $msi = Join-Path $env:RUNNER_TEMP 'LibreOffice_26.8.0.msi'
+          Invoke-WebRequest -Uri $url -OutFile $msi
+          Start-Process msiexec.exe -ArgumentList @('/i', $msi, '/qn', '/norestart') -Wait
+
+      - name: Download companion package
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: rag-companion-win-x64
+          path: ${{ runner.temp }}/companion
+
+      - name: Run 5-format smoke (txt, md, docx, pdf, doc)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $soffice = 'C:\Program Files\LibreOffice\program\soffice.com'
+          if (-not (Test-Path $soffice)) { throw "soffice.com not found at $soffice" }
+          $companionDir = "$env:RUNNER_TEMP\companion"
+          Expand-Archive -Path "$companionDir\Rag.Companion-win-x64.zip" -DestinationPath "$companionDir\bin"
+          $smokeDir = "$env:RUNNER_TEMP\smoke"
+          New-Item -ItemType Directory -Force -Path $smokeDir | Out-Null
+          Copy-Item tests/fixtures/import/sample.txt $smokeDir
+          Copy-Item tests/fixtures/import/sample.md $smokeDir
+          Copy-Item tests/fixtures/import/sample.docx $smokeDir
+          Copy-Item tests/fixtures/import/sample.pdf $smokeDir
+          # Generate a real Word 97-2003 .doc from the DOCX fixture with pinned LibreOffice.
+          & $soffice --headless --convert-to doc --outdir $smokeDir tests/fixtures/import/sample.docx
+          if (-not (Test-Path "$smokeDir\sample.doc")) { throw 'LibreOffice failed to generate sample.doc.' }
+          $config = @{
+            apiBaseUrl = $env:COMPANION_API_BASE_URL
+            companionBaseUrl = $env:COMPANION_BFF_URL
+            companionId = $env:COMPANION_ID
+            companionKeyId = $env:COMPANION_KEY_ID
+            companionSecret = $env:COMPANION_SECRET
+            serviceClientKeyId = $env:COMPANION_SERVICE_CLIENT_KEY_ID
+            serviceClientSecret = $env:COMPANION_SERVICE_CLIENT_SECRET
+            roots = @($smokeDir)
+            libreOfficePath = $soffice
+            failureLogPath = "$env:RUNNER_TEMP\smoke-failures.jsonl"
+          }
+          $config | ConvertTo-Json | Set-Content -Path "$env:RUNNER_TEMP\smoke.json" -Encoding UTF8
+          & "$companionDir\bin\Rag.Companion.exe" run --config "$env:RUNNER_TEMP\smoke.json"
+          if ($LASTEXITCODE -ne 0) {
+            Get-Content "$env:RUNNER_TEMP\smoke-failures.jsonl" -ErrorAction SilentlyContinue
+            throw "5-format smoke failed with exit code $LASTEXITCODE"
+          }
+          Write-Host '5-format smoke passed: txt, md, docx, pdf, doc all extracted and ingested.'
+
   release:
     name: Create GitHub Release
     needs:
       - completion
+      - companion
+      - companion-bff-smoke
+      - companion-format-smoke
     runs-on: ubuntu-latest
     permissions:
-      contents: write # create the GitHub Release record only
+      contents: write # create the GitHub Release record and attach assets only
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
     steps:
+      - name: Download companion package
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: rag-companion-win-x64
+          path: ${{ runner.temp }}/companion
+
       - name: Create GitHub Release
         run: |
           set -Eeuo pipefail
@@ -556,3 +759,11 @@ jobs:
             args+=(--prerelease)
           fi
           gh "${args[@]}"
+
+      - name: Attach companion package and evidence
+        run: |
+          set -Eeuo pipefail
+          gh release upload "${GITHUB_REF_NAME}" \
+            "${RUNNER_TEMP}/companion/Rag.Companion-win-x64.zip" \
+            "${RUNNER_TEMP}/companion/SHA256SUMS.txt" \
+            --clobber
