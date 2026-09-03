@@ -2,8 +2,6 @@ name: ci-pr
 
 on:
   pull_request:
-    branches:
-      - develop
 
 concurrency:
   group: pr-${{ github.event.pull_request.number }}
