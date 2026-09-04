@@ -62,4 +62,16 @@ public sealed class AdminOperation
     public DateTimeOffset CreatedAt { get; private set; }
 
     public string? SafeResult { get; private set; }
+
+    public const string ProcessingState = "processing";
+
+    public const string CompletedState = "completed";
+
+    public bool IsCompleted => string.Equals(State, CompletedState, StringComparison.Ordinal);
+
+    public void Complete(string? safeResult)
+    {
+        State = CompletedState;
+        SafeResult = safeResult;
+    }
 }
