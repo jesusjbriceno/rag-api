@@ -179,3 +179,154 @@ public interface IAdminRepository
 
     bool IsConcurrencyViolation(Exception exception);
 }
+
+// ---------------------------------------------------------------------------
+// Client lifecycle handlers.
+// ---------------------------------------------------------------------------
+
+public sealed class CreateClientHandler(IAdminRepository repository)
+{
+    public async Task<AdminCreateClientResult> HandleAsync(
+        AdminActor actor,
+        Guid idempotencyKey,
+        string fingerprint,
+        string? name,
+        string? description,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(name) || name.Trim().Length > 200)
+        {
+            throw new ArgumentException("A client name containing at most 200 characters is required.", nameof(name));
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        var reservation = await repository.ReserveOperationAsync(actor.AppId, idempotencyKey, fingerprint, now, cancellationToken);
+        switch (reservation.Disposition)
+        {
+            case AdminReservationDisposition.Replayed:
+                if (Guid.TryParse(reservation.SafeResult, out var replayedId) &&
+                    await repository.FindClientByIdAsync(replayedId, cancellationToken) is { } replayedClient)
+                {
+                    return new AdminCreateClientResult(AdminSupport.ToClientMetadata(replayedClient), true);
+                }
+
+                throw new AdminConflictException("idempotency_conflict");
+            case AdminReservationDisposition.InProgress:
+                throw new AdminConflictException("in_progress", retryAfterSeconds: 1);
+            case AdminReservationDisposition.FingerprintMismatch:
+                throw new AdminConflictException("idempotency_conflict");
+        }
+
+        var normalizedName = name.Trim();
+        if (await repository.FindClientByNameAsync(normalizedName, cancellationToken) is not null)
+        {
+            await repository.AbandonReservedOperationAsync(cancellationToken);
+            throw new AdminConflictException("duplicate");
+        }
+
+        var client = new ServiceClient(Guid.NewGuid(), normalizedName, now, description);
+        repository.AddClient(client);
+        repository.AddAuditEvent(
+            actor,
+            "create_client",
+            "succeeded",
+            now,
+            "client",
+            client.Id.ToString("D"),
+            idempotencyKey.ToString("D"),
+            AdminSupport.BuildClientAllowlistedJson(normalizedName, client.Description));
+
+        try
+        {
+            await repository.CompleteReservedOperationAsync(client.Id.ToString("D"), cancellationToken);
+        }
+        catch (Exception exception) when (repository.IsClientNameViolation(exception))
+        {
+            await repository.AbandonReservedOperationAsync(CancellationToken.None);
+            throw new AdminConflictException("duplicate");
+        }
+
+        return new AdminCreateClientResult(AdminSupport.ToClientMetadata(client), false);
+    }
+}
+
+public sealed class ListClientsHandler(IAdminRepository repository)
+{
+    public async Task<AdminClientPage> HandleAsync(int? limit, string? cursor, CancellationToken cancellationToken = default)
+    {
+        var pageSize = AdminSupport.ResolveLimit(limit);
+        var key = AdminSupport.ResolveCursor(cursor);
+        var page = await repository.ListClientsAsync(pageSize, key, cancellationToken);
+        var nextCursor = page.HasMore
+            ? AdminCursor.Encode(new AdminCursorKey(page.Items[^1].CreatedAt, page.Items[^1].Id))
+            : null;
+        return new AdminClientPage(page.Items.Select(AdminSupport.ToClientMetadata).ToList(), nextCursor);
+    }
+}
+
+public sealed class GetClientDetailHandler(IAdminRepository repository)
+{
+    public async Task<AdminClientDetail> HandleAsync(Guid clientId, CancellationToken cancellationToken = default)
+    {
+        var client = await repository.FindClientByIdAsync(clientId, cancellationToken)
+            ?? throw new ResourceNotFoundException();
+        var credentials = await repository.ListCredentialsByClientAsync(clientId, cancellationToken);
+        var now = DateTimeOffset.UtcNow;
+        return new AdminClientDetail(
+            AdminSupport.ToClientMetadata(client),
+            credentials.Select(credential => AdminSupport.ToCredentialMetadata(credential, now)).ToList());
+    }
+}
+
+internal static class AdminSupport
+{
+    public const int DefaultPageSize = 50;
+    public const int MaxPageSize = 100;
+
+    public static AdminClientMetadata ToClientMetadata(ServiceClient client) =>
+        new(client.Id, client.Name, client.Description, client.CreatedAt);
+
+    public static AdminCredentialMetadata ToCredentialMetadata(ClientCredential credential, DateTimeOffset now) =>
+        new(
+            credential.Id,
+            credential.ServiceClientId,
+            credential.KeyId,
+            credential.Description,
+            credential.Version,
+            ComputeState(credential, now),
+            credential.CreatedAt,
+            credential.ExpiresAt,
+            credential.LastRotatedAt,
+            credential.RevokedAt);
+
+    public static int ResolveLimit(int? limit)
+    {
+        var size = limit ?? DefaultPageSize;
+        if (size < 1 || size > MaxPageSize)
+        {
+            throw new ArgumentException("Page size must be between 1 and 100.", nameof(limit));
+        }
+
+        return size;
+    }
+
+    public static AdminCursorKey? ResolveCursor(string? cursor)
+    {
+        if (string.IsNullOrWhiteSpace(cursor))
+        {
+            return null;
+        }
+
+        return AdminCursor.TryDecode(cursor)
+            ?? throw new ArgumentException("The cursor is invalid.", nameof(cursor));
+    }
+
+    public static string? BuildClientAllowlistedJson(string name, string? description) =>
+        description is null
+            ? JsonSerializer.Serialize(new { name })
+            : JsonSerializer.Serialize(new { name, description });
+
+    private static string ComputeState(ClientCredential credential, DateTimeOffset now) =>
+        credential.Status == CredentialStatus.Revoked ? "revoked"
+        : credential.ExpiresAt is not null && credential.ExpiresAt <= now ? "expired"
+        : "active";
