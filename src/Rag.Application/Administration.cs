@@ -278,6 +278,102 @@ public sealed class GetClientDetailHandler(IAdminRepository repository)
     }
 }
 
+public sealed class IssueCredentialHandler(
+    IAdminRepository repository,
+    ICredentialGenerator generator,
+    ICredentialSecretHasher secretHasher)
+{
+    public async Task<AdminCredentialDelivery> HandleAsync(
+        AdminActor actor,
+        Guid idempotencyKey,
+        string fingerprint,
+        Guid clientId,
+        string? description,
+        DateTimeOffset? expiresAt,
+        CancellationToken cancellationToken = default)
+    {
+        if (clientId == Guid.Empty)
+        {
+            throw new ArgumentException("A client id is required.", nameof(clientId));
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        if (expiresAt is not null && expiresAt <= now)
+        {
+            throw new ArgumentException("Credential expiry must be in the future.", nameof(expiresAt));
+        }
+
+        if (await repository.FindClientByIdAsync(clientId, cancellationToken) is null)
+        {
+            throw new ResourceNotFoundException();
+        }
+
+        var reservation = await repository.ReserveOperationAsync(actor.AppId, idempotencyKey, fingerprint, now, cancellationToken);
+        switch (reservation.Disposition)
+        {
+            case AdminReservationDisposition.Replayed:
+                throw new AdminConflictException("secret_already_delivered");
+            case AdminReservationDisposition.InProgress:
+                throw new AdminConflictException("in_progress", retryAfterSeconds: 1);
+            case AdminReservationDisposition.FingerprintMismatch:
+                throw new AdminConflictException("idempotency_conflict");
+        }
+
+        var secret = generator.GenerateSecret();
+        var material = secretHasher.Hash(secret);
+        var credential = new ClientCredential(
+            Guid.NewGuid(),
+            clientId,
+            generator.GenerateKeyId(),
+            material.Hash,
+            material.Salt,
+            material.Version,
+            now,
+            expiresAt,
+            description);
+
+        repository.AddCredential(credential);
+        repository.AddAuditEvent(
+            actor,
+            "issue_credential",
+            "succeeded",
+            now,
+            "credential",
+            credential.Id.ToString("D"),
+            idempotencyKey.ToString("D"),
+            AdminSupport.BuildCredentialAllowlistedJson(credential.KeyId));
+
+        await repository.CompleteReservedOperationAsync(credential.Id.ToString("D"), cancellationToken);
+
+        return new AdminCredentialDelivery(AdminSupport.ToCredentialMetadata(credential, now), secret);
+    }
+}
+
+public sealed class ListCredentialsHandler(IAdminRepository repository)
+{
+    public async Task<IReadOnlyList<AdminCredentialMetadata>> HandleAsync(Guid clientId, CancellationToken cancellationToken = default)
+    {
+        if (await repository.FindClientByIdAsync(clientId, cancellationToken) is null)
+        {
+            throw new ResourceNotFoundException();
+        }
+
+        var credentials = await repository.ListCredentialsByClientAsync(clientId, cancellationToken);
+        var now = DateTimeOffset.UtcNow;
+        return credentials.Select(credential => AdminSupport.ToCredentialMetadata(credential, now)).ToList();
+    }
+}
+
+public sealed class GetCredentialHandler(IAdminRepository repository)
+{
+    public async Task<AdminCredentialMetadata> HandleAsync(Guid credentialId, CancellationToken cancellationToken = default)
+    {
+        var credential = await repository.FindCredentialByIdAsync(credentialId, cancellationToken)
+            ?? throw new ResourceNotFoundException();
+        return AdminSupport.ToCredentialMetadata(credential, DateTimeOffset.UtcNow);
+    }
+}
+
 internal static class AdminSupport
 {
     public const int DefaultPageSize = 50;
@@ -325,6 +421,9 @@ internal static class AdminSupport
         description is null
             ? JsonSerializer.Serialize(new { name })
             : JsonSerializer.Serialize(new { name, description });
+
+    public static string BuildCredentialAllowlistedJson(string keyId) =>
+        JsonSerializer.Serialize(new { keyId });
 
     private static string ComputeState(ClientCredential credential, DateTimeOffset now) =>
         credential.Status == CredentialStatus.Revoked ? "revoked"
