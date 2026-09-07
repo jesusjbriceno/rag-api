@@ -23,6 +23,8 @@ public static class AdminAuthenticationDefaults
 
     public const string ActorSubjectClaim = "admin_actor_subject";
     public const string AppIdClaim = "admin_app_id";
+    public const string IdempotencyKeyClaim = "admin_idempotency_key";
+    public const string RequestFingerprintClaim = "admin_request_fingerprint";
 }
 
 public sealed class AdminAuthenticationHandler(
@@ -82,14 +84,28 @@ public sealed class AdminAuthenticationHandler(
             return AuthenticateResult.Fail("Admin authentication failed.");
         }
 
+        var fingerprint = ComputeSha256Hex(Encoding.UTF8.GetBytes(
+            $"{Request.Method}\n{Request.Path.ToString()}{Request.QueryString.ToString()}\n{proof.BodyHash}"));
+
         var identity = new ClaimsIdentity(
             [
                 new Claim(AdminAuthenticationDefaults.ActorSubjectClaim, actor.Value.ActorSubject),
                 new Claim(AdminAuthenticationDefaults.AppIdClaim, actor.Value.AppId),
+                new Claim(AdminAuthenticationDefaults.IdempotencyKeyClaim, idempotencyKey),
+                new Claim(AdminAuthenticationDefaults.RequestFingerprintClaim, fingerprint),
             ],
             Scheme.Name);
         var principal = new ClaimsPrincipal(identity);
         return AuthenticateResult.Success(new AuthenticationTicket(principal, Scheme.Name));
+    }
+
+    protected override async Task HandleChallengeAsync(AuthenticationProperties properties)
+    {
+        await AdminProblem.Create(
+            Context,
+            StatusCodes.Status401Unauthorized,
+            "Unauthorized",
+            "unauthorized").ExecuteAsync(Context);
     }
 
     private string? ReadSingleHeader(string name)
@@ -134,4 +150,12 @@ public static class AdminHttpContextExtensions
         var appId = context.User.FindFirst(AdminAuthenticationDefaults.AppIdClaim)?.Value;
         return subject is not null && appId is not null ? new AdminActor(subject, appId) : null;
     }
+
+    public static Guid? GetAdminIdempotencyKey(this HttpContext context) =>
+        Guid.TryParse(context.User.FindFirst(AdminAuthenticationDefaults.IdempotencyKeyClaim)?.Value, out var key)
+            ? key
+            : null;
+
+    public static string? GetAdminRequestFingerprint(this HttpContext context) =>
+        context.User.FindFirst(AdminAuthenticationDefaults.RequestFingerprintClaim)?.Value;
 }
