@@ -82,6 +82,7 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddScoped<GetCredentialHandler>();
         services.AddScoped<RotateCredentialHandler>();
         services.AddScoped<RevokeCredentialHandler>();
+        services.AddScoped<ListAuditHandler>();
 
         services.AddSingleton(serviceProvider => new JwtKeyMaterial(serviceProvider.GetRequiredService<IOptions<JwtOptions>>().Value));
         services.AddScoped<IIngestionRepository, IngestionRepository>();

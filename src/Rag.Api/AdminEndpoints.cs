@@ -12,6 +12,7 @@ public static class AdminEndpoints
         group.MapAdminClientEndpoints();
         group.MapAdminCredentialReadEndpoints();
         group.MapAdminCredentialMutationEndpoints();
+        group.MapAdminAuditEndpoints();
 
         return group;
     }
