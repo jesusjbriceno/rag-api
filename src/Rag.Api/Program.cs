@@ -84,6 +84,10 @@ if (builder.Configuration.GetValue<bool>("AdminPlane:Enabled"))
     builder.Services.AddAuthentication()
         .AddScheme<AuthenticationSchemeOptions, AdminAuthenticationHandler>(
             AdminAuthenticationDefaults.AuthenticationScheme, _ => { });
+    builder.Services.AddAuthorizationBuilder()
+        .AddPolicy("AdminPlane", policy => policy
+            .AddAuthenticationSchemes(AdminAuthenticationDefaults.AuthenticationScheme)
+            .RequireAuthenticatedUser());
 }
 builder.Services.AddRateLimiter(options =>
 {
@@ -240,6 +244,11 @@ app.MapPost("/api/v1/retrieval:search", async (HttpContext context, SemanticRetr
             return ApiEndpointSupport.InvalidInput();
         }
     });
+
+if (builder.Configuration.GetValue<bool>("AdminPlane:Enabled"))
+{
+    app.MapAdminEndpoints();
+}
 
 app.Run();
 

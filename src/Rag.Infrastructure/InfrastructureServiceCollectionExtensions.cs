@@ -73,6 +73,11 @@ public static class InfrastructureServiceCollectionExtensions
             services.AddScoped<AdminAuthenticator>();
         }
 
+        services.AddScoped<IAdminRepository, AdminRepository>();
+        services.AddScoped<CreateClientHandler>();
+        services.AddScoped<ListClientsHandler>();
+        services.AddScoped<GetClientDetailHandler>();
+
         services.AddSingleton(serviceProvider => new JwtKeyMaterial(serviceProvider.GetRequiredService<IOptions<JwtOptions>>().Value));
         services.AddScoped<IIngestionRepository, IngestionRepository>();
         services.AddScoped<ICollectionCommandRepository, OwnedCollectionRepository>();
