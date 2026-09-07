@@ -566,3 +566,17 @@ public sealed class RevokeCredentialHandler(IAdminRepository repository)
         return AdminSupport.ToCredentialMetadata(credential, now);
     }
 }
+
+public sealed class ListAuditHandler(IAdminRepository repository)
+{
+    public async Task<AdminAuditPage> HandleAsync(int? limit, string? cursor, CancellationToken cancellationToken = default)
+    {
+        var pageSize = AdminSupport.ResolveLimit(limit);
+        var key = AdminSupport.ResolveCursor(cursor);
+        var page = await repository.ListAuditAsync(pageSize, key, cancellationToken);
+        var nextCursor = page.HasMore
+            ? AdminCursor.Encode(new AdminCursorKey(page.Items[^1].OccurredAt, page.Items[^1].Id))
+            : null;
+        return new AdminAuditPage(page.Items.ToList(), nextCursor);
+    }
+}
