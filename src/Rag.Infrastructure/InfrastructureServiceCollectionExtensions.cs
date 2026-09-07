@@ -77,6 +77,9 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddScoped<CreateClientHandler>();
         services.AddScoped<ListClientsHandler>();
         services.AddScoped<GetClientDetailHandler>();
+        services.AddScoped<IssueCredentialHandler>();
+        services.AddScoped<ListCredentialsHandler>();
+        services.AddScoped<GetCredentialHandler>();
 
         services.AddSingleton(serviceProvider => new JwtKeyMaterial(serviceProvider.GetRequiredService<IOptions<JwtOptions>>().Value));
         services.AddScoped<IIngestionRepository, IngestionRepository>();

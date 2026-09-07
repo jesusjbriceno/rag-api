@@ -10,6 +10,7 @@ public static class AdminEndpoints
             .RequireAuthorization("AdminPlane");
 
         group.MapAdminClientEndpoints();
+        group.MapAdminCredentialReadEndpoints();
 
         return group;
     }
