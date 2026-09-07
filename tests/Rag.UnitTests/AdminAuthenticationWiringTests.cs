@@ -30,6 +30,8 @@ public sealed class AdminAuthenticationWiringTests
 
         Assert.Throws<OptionsValidationException>(() => provider.GetRequiredService<IOptions<AdminAssertionOptions>>().Value);
         Assert.Throws<OptionsValidationException>(() => provider.GetRequiredService<IOptions<AdminAppAuthOptions>>().Value);
+        Assert.Throws<OptionsValidationException>(() => provider.GetRequiredService<IOptions<AdminAuditOptions>>().Value);
+        Assert.Throws<OptionsValidationException>(() => provider.GetRequiredService<IOptions<AdminOperationsOptions>>().Value);
     }
 
     [Fact]
@@ -42,6 +44,7 @@ public sealed class AdminAuthenticationWiringTests
         Assert.NotNull(provider.GetService<AdminAssertionKeyRing>());
         Assert.NotNull(provider.GetService<AdminMachineProofVerifier>());
         Assert.NotNull(provider.GetService<IAdminAssertionReplayRepository>());
+        Assert.Equal("days", provider.GetRequiredService<IOptions<AdminAuditOptions>>().Value.NormalizedMode);
     }
 
     private static ServiceProvider BuildProvider(bool enabled, bool withAdminConfig)
@@ -82,6 +85,9 @@ public sealed class AdminAuthenticationWiringTests
             values["AdminAppAuth:Apps:0:AppId"] = "admin-app";
             values["AdminAppAuth:Apps:0:KeyId"] = "machine-key-1";
             values["AdminAppAuth:Apps:0:CurrentSecret"] = "machine-secret";
+            values["AdminAudit:RetentionMode"] = "days";
+            values["AdminAudit:RetentionDays"] = "30";
+            values["AdminOperations:RetentionHours"] = "24";
         }
 
         return new ConfigurationBuilder()

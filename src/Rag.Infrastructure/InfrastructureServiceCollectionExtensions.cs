@@ -62,6 +62,14 @@ public static class InfrastructureServiceCollectionExtensions
                 .Bind(configuration.GetSection(AdminAppAuthOptions.SectionName))
                 .Validate(options => TryValidateAdminAppAuthOptions(options, out _), "Admin app machine authentication configuration is invalid.")
                 .ValidateOnStart();
+            services.AddOptions<AdminAuditOptions>()
+                .Bind(configuration.GetSection(AdminAuditOptions.SectionName))
+                .Validate(options => TryValidateAdminAuditOptions(options, out _), "Admin audit retention configuration is invalid.")
+                .ValidateOnStart();
+            services.AddOptions<AdminOperationsOptions>()
+                .Bind(configuration.GetSection(AdminOperationsOptions.SectionName))
+                .Validate(options => TryValidateAdminOperationsOptions(options, out _), "Admin operations retention configuration is invalid.")
+                .ValidateOnStart();
             services.AddSingleton(serviceProvider => new AdminAssertionKeyRing(
                 serviceProvider.GetRequiredService<IOptions<AdminAssertionOptions>>().Value));
             services.AddSingleton(serviceProvider => new AdminAssertionValidator(
@@ -167,6 +175,36 @@ public static class InfrastructureServiceCollectionExtensions
     }
 
     private static bool TryValidateAdminAppAuthOptions(AdminAppAuthOptions options, out Exception? exception)
+    {
+        try
+        {
+            options.Validate();
+            exception = null;
+            return true;
+        }
+        catch (Exception caught) when (caught is ArgumentException or InvalidOperationException)
+        {
+            exception = caught;
+            return false;
+        }
+    }
+
+    private static bool TryValidateAdminAuditOptions(AdminAuditOptions options, out Exception? exception)
+    {
+        try
+        {
+            options.Validate();
+            exception = null;
+            return true;
+        }
+        catch (Exception caught) when (caught is ArgumentException or InvalidOperationException)
+        {
+            exception = caught;
+            return false;
+        }
+    }
+
+    private static bool TryValidateAdminOperationsOptions(AdminOperationsOptions options, out Exception? exception)
     {
         try
         {
