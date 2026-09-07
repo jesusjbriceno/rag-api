@@ -83,6 +83,79 @@ public sealed class CredentialHandlerTests
         Assert.Equal("active", result.State);
     }
 
+    [Fact]
+    public async Task Rotate_credential_replaces_secret_material_and_completes_the_operation()
+    {
+        var client = Client();
+        var credential = Credential(client.Id, "Read-only");
+        var repository = new InMemoryAdminRepository();
+        repository.Credentials.Add(credential);
+
+        var result = await new RotateCredentialHandler(repository, new FakeCredentialGenerator(), new FakeSecretHasher()).HandleAsync(
+            new AdminActor("operator", "admin-app"), Guid.NewGuid(), "fingerprint", credential.Id, credential.Version);
+
+        Assert.Equal(FakeCredentialGenerator.Secret, result.Secret);
+        Assert.Equal(2, credential.Version);
+        Assert.NotNull(credential.LastRotatedAt);
+        Assert.Equal("active", result.Credential.State);
+        Assert.Equal(credential.Id.ToString("D"), repository.CompletedResult);
+        Assert.Contains(FakeCredentialGenerator.KeyId, Assert.Single(repository.AuditMetadata));
+    }
+
+    [Fact]
+    public async Task Revoke_credential_marks_it_revoked_and_completes_the_operation()
+    {
+        var client = Client();
+        var credential = Credential(client.Id, "Read-only");
+        var repository = new InMemoryAdminRepository();
+        repository.Credentials.Add(credential);
+
+        var result = await new RevokeCredentialHandler(repository).HandleAsync(
+            new AdminActor("operator", "admin-app"), Guid.NewGuid(), "fingerprint", credential.Id, credential.Version);
+
+        Assert.Equal("revoked", result.State);
+        Assert.Equal(CredentialStatus.Revoked, credential.Status);
+        Assert.Equal(2, credential.Version);
+        Assert.NotNull(credential.RevokedAt);
+        Assert.Equal(credential.Id.ToString("D"), repository.CompletedResult);
+    }
+
+    [Fact]
+    public async Task Rotate_credential_rejects_a_stale_version_before_reserving_an_operation()
+    {
+        var client = Client();
+        var credential = Credential(client.Id, "Read-only");
+        var repository = new InMemoryAdminRepository();
+        repository.Credentials.Add(credential);
+
+        var exception = await Assert.ThrowsAsync<AdminConflictException>(() => new RotateCredentialHandler(repository, new FakeCredentialGenerator(), new FakeSecretHasher()).HandleAsync(
+            new AdminActor("operator", "admin-app"), Guid.NewGuid(), "fingerprint", credential.Id, credential.Version + 1));
+
+        Assert.Equal("version_conflict", exception.Code);
+        Assert.Empty(repository.AuditMetadata);
+        Assert.Null(repository.CompletedResult);
+    }
+
+    [Fact]
+    public async Task Revoke_credential_returns_the_persisted_result_for_a_replayed_operation()
+    {
+        var client = Client();
+        var credential = Credential(client.Id, "Read-only");
+        var repository = new InMemoryAdminRepository
+        {
+            Reservation = new AdminOperationReservation(AdminReservationDisposition.Replayed, credential.Id.ToString("D")),
+        };
+        repository.Credentials.Add(credential);
+
+        var result = await new RevokeCredentialHandler(repository).HandleAsync(
+            new AdminActor("operator", "admin-app"), Guid.NewGuid(), "fingerprint", credential.Id, credential.Version);
+
+        Assert.Equal("active", result.State);
+        Assert.Equal(CredentialStatus.Active, credential.Status);
+        Assert.Empty(repository.AuditMetadata);
+        Assert.Null(repository.CompletedResult);
+    }
+
     private static ServiceClient Client() => new(Guid.NewGuid(), "reports", DateTimeOffset.UtcNow.AddDays(-1));
 
     private static ClientCredential Credential(Guid clientId, string description, DateTimeOffset? expiresAt = null) =>
@@ -93,12 +166,18 @@ public sealed class CredentialHandlerTests
         public List<ServiceClient> Clients { get; } = [];
         public List<ClientCredential> Credentials { get; } = [];
         public List<string?> AuditMetadata { get; } = [];
+        public AdminOperationReservation Reservation { get; init; } = new(AdminReservationDisposition.Proceed, null);
+        public string? CompletedResult { get; private set; }
         public int FindClientCalls { get; private set; }
 
         public Task<AdminOperationReservation> ReserveOperationAsync(string appId, Guid idempotencyKey, string fingerprint, DateTimeOffset now, CancellationToken cancellationToken) =>
-            Task.FromResult(new AdminOperationReservation(AdminReservationDisposition.Proceed, null));
+            Task.FromResult(Reservation);
 
-        public Task CompleteReservedOperationAsync(string safeResult, CancellationToken cancellationToken) => Task.CompletedTask;
+        public Task CompleteReservedOperationAsync(string safeResult, CancellationToken cancellationToken)
+        {
+            CompletedResult = safeResult;
+            return Task.CompletedTask;
+        }
 
         public Task AbandonReservedOperationAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 

@@ -429,3 +429,140 @@ internal static class AdminSupport
         credential.Status == CredentialStatus.Revoked ? "revoked"
         : credential.ExpiresAt is not null && credential.ExpiresAt <= now ? "expired"
         : "active";
+}
+
+public sealed class RotateCredentialHandler(
+    IAdminRepository repository,
+    ICredentialGenerator generator,
+    ICredentialSecretHasher secretHasher)
+{
+    public async Task<AdminCredentialDelivery> HandleAsync(
+        AdminActor actor,
+        Guid idempotencyKey,
+        string fingerprint,
+        Guid credentialId,
+        int expectedVersion,
+        CancellationToken cancellationToken = default)
+    {
+        if (expectedVersion < 1)
+        {
+            throw new ArgumentException("An expected credential version is required.", nameof(expectedVersion));
+        }
+
+        var credential = await repository.FindCredentialByIdAsync(credentialId, cancellationToken)
+            ?? throw new ResourceNotFoundException();
+
+        var now = DateTimeOffset.UtcNow;
+        if (credential.Version != expectedVersion)
+        {
+            throw new AdminConflictException("version_conflict");
+        }
+
+        if (!credential.IsActiveAt(now))
+        {
+            throw new AdminConflictException("credential_not_active");
+        }
+
+        var reservation = await repository.ReserveOperationAsync(actor.AppId, idempotencyKey, fingerprint, now, cancellationToken);
+        switch (reservation.Disposition)
+        {
+            case AdminReservationDisposition.Replayed:
+                throw new AdminConflictException("secret_already_delivered");
+            case AdminReservationDisposition.InProgress:
+                throw new AdminConflictException("in_progress", retryAfterSeconds: 1);
+            case AdminReservationDisposition.FingerprintMismatch:
+                throw new AdminConflictException("idempotency_conflict");
+        }
+
+        var secret = generator.GenerateSecret();
+        var material = secretHasher.Hash(secret);
+        credential.Rotate(material.Hash, material.Salt, material.Version, now);
+        repository.AddAuditEvent(
+            actor,
+            "rotate_credential",
+            "succeeded",
+            now,
+            "credential",
+            credential.Id.ToString("D"),
+            idempotencyKey.ToString("D"),
+            AdminSupport.BuildCredentialAllowlistedJson(credential.KeyId));
+
+        try
+        {
+            await repository.CompleteReservedOperationAsync(credential.Id.ToString("D"), cancellationToken);
+        }
+        catch (Exception exception) when (repository.IsConcurrencyViolation(exception))
+        {
+            await repository.AbandonReservedOperationAsync(CancellationToken.None);
+            throw new AdminConflictException("version_conflict");
+        }
+
+        return new AdminCredentialDelivery(AdminSupport.ToCredentialMetadata(credential, now), secret);
+    }
+}
+
+public sealed class RevokeCredentialHandler(IAdminRepository repository)
+{
+    public async Task<AdminCredentialMetadata> HandleAsync(
+        AdminActor actor,
+        Guid idempotencyKey,
+        string fingerprint,
+        Guid credentialId,
+        int expectedVersion,
+        CancellationToken cancellationToken = default)
+    {
+        if (expectedVersion < 1)
+        {
+            throw new ArgumentException("An expected credential version is required.", nameof(expectedVersion));
+        }
+
+        var credential = await repository.FindCredentialByIdAsync(credentialId, cancellationToken)
+            ?? throw new ResourceNotFoundException();
+
+        if (credential.Version != expectedVersion)
+        {
+            throw new AdminConflictException("version_conflict");
+        }
+
+        var reservation = await repository.ReserveOperationAsync(actor.AppId, idempotencyKey, fingerprint, DateTimeOffset.UtcNow, cancellationToken);
+        switch (reservation.Disposition)
+        {
+            case AdminReservationDisposition.Replayed:
+                if (Guid.TryParse(reservation.SafeResult, out var replayedId) &&
+                    await repository.FindCredentialByIdAsync(replayedId, cancellationToken) is { } replayedCredential)
+                {
+                    return AdminSupport.ToCredentialMetadata(replayedCredential, DateTimeOffset.UtcNow);
+                }
+
+                throw new AdminConflictException("idempotency_conflict");
+            case AdminReservationDisposition.InProgress:
+                throw new AdminConflictException("in_progress", retryAfterSeconds: 1);
+            case AdminReservationDisposition.FingerprintMismatch:
+                throw new AdminConflictException("idempotency_conflict");
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        credential.Revoke(now);
+        repository.AddAuditEvent(
+            actor,
+            "revoke_credential",
+            "succeeded",
+            now,
+            "credential",
+            credential.Id.ToString("D"),
+            idempotencyKey.ToString("D"),
+            AdminSupport.BuildCredentialAllowlistedJson(credential.KeyId));
+
+        try
+        {
+            await repository.CompleteReservedOperationAsync(credential.Id.ToString("D"), cancellationToken);
+        }
+        catch (Exception exception) when (repository.IsConcurrencyViolation(exception))
+        {
+            await repository.AbandonReservedOperationAsync(CancellationToken.None);
+            throw new AdminConflictException("version_conflict");
+        }
+
+        return AdminSupport.ToCredentialMetadata(credential, now);
+    }
+}
