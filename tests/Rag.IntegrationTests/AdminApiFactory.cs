@@ -88,6 +88,9 @@ public sealed class AdminApiFactory(string connectionString, string contentRoot)
             ["AdminAppAuth:Apps:0:AppId"] = AppId,
             ["AdminAppAuth:Apps:0:KeyId"] = KeyId,
             ["AdminAppAuth:Apps:0:CurrentSecret"] = MachineSecret,
+            ["AdminAudit:RetentionMode"] = "days",
+            ["AdminAudit:RetentionDays"] = "30",
+            ["AdminOperations:RetentionHours"] = "24",
         }));
         builder.ConfigureServices(services =>
         {

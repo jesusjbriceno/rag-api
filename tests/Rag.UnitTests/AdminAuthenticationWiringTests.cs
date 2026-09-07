@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Security.Cryptography;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 using Rag.Application;
 using Rag.Domain;
@@ -44,6 +45,7 @@ public sealed class AdminAuthenticationWiringTests
         Assert.NotNull(provider.GetService<AdminAssertionKeyRing>());
         Assert.NotNull(provider.GetService<AdminMachineProofVerifier>());
         Assert.NotNull(provider.GetService<IAdminAssertionReplayRepository>());
+        Assert.Contains(provider.GetServices<IHostedService>(), service => service is AdminRetentionWorker);
         Assert.Equal("days", provider.GetRequiredService<IOptions<AdminAuditOptions>>().Value.NormalizedMode);
     }
 

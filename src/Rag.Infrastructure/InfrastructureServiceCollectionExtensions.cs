@@ -70,6 +70,7 @@ public static class InfrastructureServiceCollectionExtensions
                 .Bind(configuration.GetSection(AdminOperationsOptions.SectionName))
                 .Validate(options => TryValidateAdminOperationsOptions(options, out _), "Admin operations retention configuration is invalid.")
                 .ValidateOnStart();
+            services.AddHostedService<AdminRetentionWorker>();
             services.AddSingleton(serviceProvider => new AdminAssertionKeyRing(
                 serviceProvider.GetRequiredService<IOptions<AdminAssertionOptions>>().Value));
             services.AddSingleton(serviceProvider => new AdminAssertionValidator(
