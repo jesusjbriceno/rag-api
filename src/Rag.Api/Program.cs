@@ -3,10 +3,12 @@ using System.Reflection;
 using System.Security.Claims;
 using System.Text;
 using System.Text.Json;
+using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.IdentityModel.Tokens;
+using Rag.Api;
 using Rag.Application;
 using Rag.Infrastructure;
 
@@ -77,6 +79,12 @@ builder.Services.AddAuthorizationBuilder()
     .SetFallbackPolicy(new Microsoft.AspNetCore.Authorization.AuthorizationPolicyBuilder()
         .RequireAuthenticatedUser()
         .Build());
+if (builder.Configuration.GetValue<bool>("AdminPlane:Enabled"))
+{
+    builder.Services.AddAuthentication()
+        .AddScheme<AuthenticationSchemeOptions, AdminAuthenticationHandler>(
+            AdminAuthenticationDefaults.AuthenticationScheme, _ => { });
+}
 builder.Services.AddRateLimiter(options =>
 {
     options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;

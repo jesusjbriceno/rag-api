@@ -1,0 +1,137 @@
+using System.Globalization;
+using System.Security.Claims;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Encodings.Web;
+using Microsoft.AspNetCore.Authentication;
+using Microsoft.Extensions.Options;
+using Rag.Domain;
+using Rag.Infrastructure;
+
+namespace Rag.Api;
+
+public static class AdminAuthenticationDefaults
+{
+    public const string AuthenticationScheme = "Admin";
+
+    public const string AppIdHeader = "X-Admin-App-Id";
+    public const string KeyIdHeader = "X-Admin-Key-Id";
+    public const string TimestampHeader = "X-Admin-Timestamp";
+    public const string SignatureHeader = "X-Admin-Signature";
+    public const string AssertionHeader = "X-Admin-Assertion";
+    public const string IdempotencyKeyHeader = "Idempotency-Key";
+
+    public const string ActorSubjectClaim = "admin_actor_subject";
+    public const string AppIdClaim = "admin_app_id";
+}
+
+public sealed class AdminAuthenticationHandler(
+    IOptionsMonitor<AuthenticationSchemeOptions> options,
+    ILoggerFactory logger,
+    UrlEncoder encoder) : AuthenticationHandler<AuthenticationSchemeOptions>(options, logger, encoder)
+{
+    private const int MaxAdminBodyBytes = 1_048_576;
+
+    protected override async Task<AuthenticateResult> HandleAuthenticateAsync()
+    {
+        if (Request.Headers.Keys.Any(AdminIdentityHeaderPolicy.IsForbidden))
+        {
+            return AuthenticateResult.Fail("Forbidden identity header present.");
+        }
+
+        var appId = ReadSingleHeader(AdminAuthenticationDefaults.AppIdHeader);
+        var keyId = ReadSingleHeader(AdminAuthenticationDefaults.KeyIdHeader);
+        var timestampRaw = ReadSingleHeader(AdminAuthenticationDefaults.TimestampHeader);
+        var signature = ReadSingleHeader(AdminAuthenticationDefaults.SignatureHeader);
+        var assertionJws = ReadSingleHeader(AdminAuthenticationDefaults.AssertionHeader);
+        var idempotencyKey = ReadSingleHeader(AdminAuthenticationDefaults.IdempotencyKeyHeader);
+
+        if (appId is null || keyId is null || timestampRaw is null || signature is null ||
+            assertionJws is null || idempotencyKey is null ||
+            !long.TryParse(timestampRaw, NumberStyles.None, CultureInfo.InvariantCulture, out var timestampUnixSeconds))
+        {
+            return AuthenticateResult.Fail("Admin authentication headers are incomplete.");
+        }
+
+        var bodyBytes = await ReadBodyAsync();
+        if (bodyBytes is null)
+        {
+            return AuthenticateResult.Fail("Admin request body is too large.");
+        }
+
+        var proof = new AdminMachineProof(
+            Request.Method,
+            Request.Path.ToString() + Request.QueryString.ToString(),
+            ComputeSha256Hex(bodyBytes),
+            ComputeSha256Hex(Encoding.UTF8.GetBytes(assertionJws)),
+            appId,
+            keyId,
+            timestampUnixSeconds,
+            idempotencyKey);
+
+        var authenticator = Context.RequestServices.GetRequiredService<AdminAuthenticator>();
+        var actor = await authenticator.AuthenticateAsync(
+            proof,
+            signature,
+            assertionJws,
+            DateTimeOffset.UtcNow,
+            Context.RequestAborted);
+
+        if (actor is null)
+        {
+            return AuthenticateResult.Fail("Admin authentication failed.");
+        }
+
+        var identity = new ClaimsIdentity(
+            [
+                new Claim(AdminAuthenticationDefaults.ActorSubjectClaim, actor.Value.ActorSubject),
+                new Claim(AdminAuthenticationDefaults.AppIdClaim, actor.Value.AppId),
+            ],
+            Scheme.Name);
+        var principal = new ClaimsPrincipal(identity);
+        return AuthenticateResult.Success(new AuthenticationTicket(principal, Scheme.Name));
+    }
+
+    private string? ReadSingleHeader(string name)
+    {
+        if (Request.Headers.TryGetValue(name, out var values) &&
+            values.Count == 1 &&
+            !string.IsNullOrWhiteSpace(values[0]))
+        {
+            return values[0];
+        }
+
+        return null;
+    }
+
+    private async Task<byte[]?> ReadBodyAsync()
+    {
+        Request.EnableBuffering();
+        using var buffer = new MemoryStream();
+        var chunk = new byte[8_192];
+        int read;
+        while ((read = await Request.Body.ReadAsync(chunk, Context.RequestAborted)) > 0)
+        {
+            buffer.Write(chunk, 0, read);
+            if (buffer.Length > MaxAdminBodyBytes)
+            {
+                return null;
+            }
+        }
+
+        Request.Body.Position = 0;
+        return buffer.ToArray();
+    }
+
+    private static string ComputeSha256Hex(byte[] bytes) => Convert.ToHexStringLower(SHA256.HashData(bytes));
+}
+
+public static class AdminHttpContextExtensions
+{
+    public static AdminActor? GetAdminActor(this HttpContext context)
+    {
+        var subject = context.User.FindFirst(AdminAuthenticationDefaults.ActorSubjectClaim)?.Value;
+        var appId = context.User.FindFirst(AdminAuthenticationDefaults.AppIdClaim)?.Value;
+        return subject is not null && appId is not null ? new AdminActor(subject, appId) : null;
+    }
+}

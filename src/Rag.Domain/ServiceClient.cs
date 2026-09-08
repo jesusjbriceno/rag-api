@@ -6,7 +6,7 @@ public sealed class ServiceClient
     {
     }
 
-    public ServiceClient(Guid id, string name, DateTimeOffset createdAt)
+    public ServiceClient(Guid id, string name, DateTimeOffset createdAt, string? description = null)
     {
         if (id == Guid.Empty)
         {
@@ -20,6 +20,7 @@ public sealed class ServiceClient
 
         Id = id;
         Name = name.Trim();
+        Description = NormalizeDescription(description);
         CreatedAt = createdAt;
     }
 
@@ -27,5 +28,23 @@ public sealed class ServiceClient
 
     public string Name { get; private set; } = null!;
 
+    public string? Description { get; private set; }
+
     public DateTimeOffset CreatedAt { get; private set; }
+
+    private static string? NormalizeDescription(string? description)
+    {
+        if (string.IsNullOrWhiteSpace(description))
+        {
+            return null;
+        }
+
+        var trimmed = description.Trim();
+        if (trimmed.Length > 500)
+        {
+            throw new ArgumentException("A service client description must not exceed 500 characters.", nameof(description));
+        }
+
+        return trimmed;
+    }
 }

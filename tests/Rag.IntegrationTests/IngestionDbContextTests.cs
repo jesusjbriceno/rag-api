@@ -68,8 +68,8 @@ public sealed class IngestionDbContextTests(PostgreSqlFixture fixture)
         await migrator.MigrateAsync("20260824150000_AddCollectionOwnership");
 
         var ownerId = Guid.NewGuid();
-        context.ServiceClients.Add(new ServiceClient(ownerId, "legacy-owner", createdAt));
-        await context.SaveChangesAsync();
+        await context.Database.ExecuteSqlInterpolatedAsync(
+            $"INSERT INTO service_clients (\"Id\", \"Name\", \"CreatedAt\") VALUES ({ownerId}, {"legacy-owner"}, {createdAt});");
         using var dataSource = new NpgsqlDataSourceBuilder(fixture.ConnectionString).Build();
         var ownership = new CollectionOwnershipOperator(new CollectionOwnershipRepository(dataSource));
 
@@ -136,15 +136,15 @@ public sealed class IngestionDbContextTests(PostgreSqlFixture fixture)
             var migrator = context.GetService<IMigrator>();
 
             await migrator.MigrateAsync("20260824150100_EnforceCollectionOwnership");
-            var owner = new ServiceClient(Guid.NewGuid(), "cutover-owner", DateTimeOffset.UtcNow);
-            context.ServiceClients.Add(owner);
-            await context.SaveChangesAsync();
+            var ownerId = Guid.NewGuid();
+            await context.Database.ExecuteSqlInterpolatedAsync(
+                $"INSERT INTO service_clients (\"Id\", \"Name\", \"CreatedAt\") VALUES ({ownerId}, {"cutover-owner"}, {DateTimeOffset.UtcNow});");
 
             var collectionId = Guid.NewGuid();
             await context.Database.ExecuteSqlInterpolatedAsync(
                 $"""
                 INSERT INTO collections ("Id", "ServiceClientId", "Name", "CreatedAt", "EmbeddingProvider", "EmbeddingModel", "EmbeddingVersion", "EmbeddingDimensions")
-                VALUES ({collectionId}, {owner.Id}, {"Legacy Ollama collection"}, {DateTimeOffset.UtcNow}, {"ollama"}, {"qwen3-embedding:0.6b"}, {"0.6b"}, {1_024});
+                VALUES ({collectionId}, {ownerId}, {"Legacy Ollama collection"}, {DateTimeOffset.UtcNow}, {"ollama"}, {"qwen3-embedding:0.6b"}, {"0.6b"}, {1_024});
                 """);
 
             var exception = await Assert.ThrowsAsync<PostgresException>(() => context.Database.MigrateAsync());
