@@ -181,7 +181,7 @@ public interface IAdminRepository
 }
 
 // ---------------------------------------------------------------------------
-// Client lifecycle handlers.
+// Handlers.
 // ---------------------------------------------------------------------------
 
 public sealed class CreateClientHandler(IAdminRepository repository)
@@ -374,63 +374,6 @@ public sealed class GetCredentialHandler(IAdminRepository repository)
     }
 }
 
-internal static class AdminSupport
-{
-    public const int DefaultPageSize = 50;
-    public const int MaxPageSize = 100;
-
-    public static AdminClientMetadata ToClientMetadata(ServiceClient client) =>
-        new(client.Id, client.Name, client.Description, client.CreatedAt);
-
-    public static AdminCredentialMetadata ToCredentialMetadata(ClientCredential credential, DateTimeOffset now) =>
-        new(
-            credential.Id,
-            credential.ServiceClientId,
-            credential.KeyId,
-            credential.Description,
-            credential.Version,
-            ComputeState(credential, now),
-            credential.CreatedAt,
-            credential.ExpiresAt,
-            credential.LastRotatedAt,
-            credential.RevokedAt);
-
-    public static int ResolveLimit(int? limit)
-    {
-        var size = limit ?? DefaultPageSize;
-        if (size < 1 || size > MaxPageSize)
-        {
-            throw new ArgumentException("Page size must be between 1 and 100.", nameof(limit));
-        }
-
-        return size;
-    }
-
-    public static AdminCursorKey? ResolveCursor(string? cursor)
-    {
-        if (string.IsNullOrWhiteSpace(cursor))
-        {
-            return null;
-        }
-
-        return AdminCursor.TryDecode(cursor)
-            ?? throw new ArgumentException("The cursor is invalid.", nameof(cursor));
-    }
-
-    public static string? BuildClientAllowlistedJson(string name, string? description) =>
-        description is null
-            ? JsonSerializer.Serialize(new { name })
-            : JsonSerializer.Serialize(new { name, description });
-
-    public static string BuildCredentialAllowlistedJson(string keyId) =>
-        JsonSerializer.Serialize(new { keyId });
-
-    private static string ComputeState(ClientCredential credential, DateTimeOffset now) =>
-        credential.Status == CredentialStatus.Revoked ? "revoked"
-        : credential.ExpiresAt is not null && credential.ExpiresAt <= now ? "expired"
-        : "active";
-}
-
 public sealed class RotateCredentialHandler(
     IAdminRepository repository,
     ICredentialGenerator generator,
@@ -579,4 +522,65 @@ public sealed class ListAuditHandler(IAdminRepository repository)
             : null;
         return new AdminAuditPage(page.Items.ToList(), nextCursor);
     }
+}
+
+// ---------------------------------------------------------------------------
+// Shared helpers.
+// ---------------------------------------------------------------------------
+
+internal static class AdminSupport
+{
+    public const int DefaultPageSize = 50;
+    public const int MaxPageSize = 100;
+
+    public static AdminClientMetadata ToClientMetadata(ServiceClient client) =>
+        new(client.Id, client.Name, client.Description, client.CreatedAt);
+
+    public static AdminCredentialMetadata ToCredentialMetadata(ClientCredential credential, DateTimeOffset now) =>
+        new(
+            credential.Id,
+            credential.ServiceClientId,
+            credential.KeyId,
+            credential.Description,
+            credential.Version,
+            ComputeState(credential, now),
+            credential.CreatedAt,
+            credential.ExpiresAt,
+            credential.LastRotatedAt,
+            credential.RevokedAt);
+
+    public static int ResolveLimit(int? limit)
+    {
+        var size = limit ?? DefaultPageSize;
+        if (size < 1 || size > MaxPageSize)
+        {
+            throw new ArgumentException("Page size must be between 1 and 100.", nameof(limit));
+        }
+
+        return size;
+    }
+
+    public static AdminCursorKey? ResolveCursor(string? cursor)
+    {
+        if (string.IsNullOrWhiteSpace(cursor))
+        {
+            return null;
+        }
+
+        return AdminCursor.TryDecode(cursor)
+            ?? throw new ArgumentException("The cursor is invalid.", nameof(cursor));
+    }
+
+    public static string? BuildClientAllowlistedJson(string name, string? description) =>
+        description is null
+            ? JsonSerializer.Serialize(new { name })
+            : JsonSerializer.Serialize(new { name, description });
+
+    public static string BuildCredentialAllowlistedJson(string keyId) =>
+        JsonSerializer.Serialize(new { keyId });
+
+    private static string ComputeState(ClientCredential credential, DateTimeOffset now) =>
+        credential.Status == CredentialStatus.Revoked ? "revoked"
+        : credential.ExpiresAt is not null && credential.ExpiresAt <= now ? "expired"
+        : "active";
 }
