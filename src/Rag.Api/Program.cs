@@ -106,6 +106,10 @@ app.UseExceptionHandler(errorApp => errorApp.Run(context =>
     Results.Problem(statusCode: StatusCodes.Status500InternalServerError, title: "Internal server error").ExecuteAsync(context)));
 app.UseAuthentication();
 app.UseRateLimiter();
+if (builder.Configuration.GetValue<bool>("AdminPlane:Enabled"))
+{
+    app.UseMiddleware<AdminObservabilityMiddleware>();
+}
 app.UseAuthorization();
 
 app.MapHealthChecks("/api/v1/health/live", new HealthCheckOptions

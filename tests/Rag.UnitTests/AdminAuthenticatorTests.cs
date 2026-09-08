@@ -27,11 +27,13 @@ public sealed class AdminAuthenticatorTests
         var now = DateTimeOffset.UtcNow;
         var proof = CreateProof(now);
 
-        var actor = await authenticator.AuthenticateAsync(proof, Sign(proof), CreateAssertion(key, now), now);
+        var result = await authenticator.AuthenticateAsync(proof, Sign(proof), CreateAssertion(key, now), now);
 
-        Assert.NotNull(actor);
-        Assert.Equal(Subject, actor.Value.ActorSubject);
-        Assert.Equal(AppId, actor.Value.AppId);
+        Assert.True(result.Succeeded);
+        Assert.Equal(AdminAuthFailureReason.None, result.FailureReason);
+        Assert.NotNull(result.Actor);
+        Assert.Equal(Subject, result.Actor.Value.ActorSubject);
+        Assert.Equal(AppId, result.Actor.Value.AppId);
     }
 
     [Fact]
@@ -43,9 +45,10 @@ public sealed class AdminAuthenticatorTests
         var now = DateTimeOffset.UtcNow;
         var proof = CreateProof(now);
 
-        var actor = await authenticator.AuthenticateAsync(proof, Sign(proof, "attacker-secret"), CreateAssertion(key, now), now);
+        var result = await authenticator.AuthenticateAsync(proof, Sign(proof, "attacker-secret"), CreateAssertion(key, now), now);
 
-        Assert.Null(actor);
+        Assert.False(result.Succeeded);
+        Assert.Equal(AdminAuthFailureReason.MachineProofInvalid, result.FailureReason);
         Assert.Equal(0, replay.ReserveCount);
     }
 
@@ -59,9 +62,10 @@ public sealed class AdminAuthenticatorTests
         var now = DateTimeOffset.UtcNow;
         var proof = CreateProof(now);
 
-        var actor = await authenticator.AuthenticateAsync(proof, Sign(proof), CreateAssertion(forgedKey, now), now);
+        var result = await authenticator.AuthenticateAsync(proof, Sign(proof), CreateAssertion(forgedKey, now), now);
 
-        Assert.Null(actor);
+        Assert.False(result.Succeeded);
+        Assert.Equal(AdminAuthFailureReason.AssertionInvalid, result.FailureReason);
         Assert.Equal(0, replay.ReserveCount);
     }
 
@@ -74,9 +78,10 @@ public sealed class AdminAuthenticatorTests
         var now = DateTimeOffset.UtcNow;
         var proof = CreateProof(now);
 
-        var actor = await authenticator.AuthenticateAsync(proof, Sign(proof), CreateAssertion(key, now, appId: "other-app"), now);
+        var result = await authenticator.AuthenticateAsync(proof, Sign(proof), CreateAssertion(key, now, appId: "other-app"), now);
 
-        Assert.Null(actor);
+        Assert.False(result.Succeeded);
+        Assert.Equal(AdminAuthFailureReason.AppMismatch, result.FailureReason);
         Assert.Equal(0, replay.ReserveCount);
     }
 
@@ -89,9 +94,10 @@ public sealed class AdminAuthenticatorTests
         var now = DateTimeOffset.UtcNow;
         var proof = CreateProof(now);
 
-        var actor = await authenticator.AuthenticateAsync(proof, Sign(proof), CreateAssertion(key, now), now);
+        var result = await authenticator.AuthenticateAsync(proof, Sign(proof), CreateAssertion(key, now), now);
 
-        Assert.Null(actor);
+        Assert.False(result.Succeeded);
+        Assert.Equal(AdminAuthFailureReason.ReplayRejected, result.FailureReason);
         Assert.Equal(1, replay.ReserveCount);
     }
 

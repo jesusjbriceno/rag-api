@@ -38,6 +38,7 @@ public sealed class AdminAuthenticationHandler(
     {
         if (Request.Headers.Keys.Any(AdminIdentityHeaderPolicy.IsForbidden))
         {
+            Context.Items[AdminObservabilityKeys.AuthFailureReason] = AdminAuthFailureReason.ForbiddenIdentityHeader;
             return AuthenticateResult.Fail("Forbidden identity header present.");
         }
 
@@ -52,12 +53,14 @@ public sealed class AdminAuthenticationHandler(
             assertionJws is null || idempotencyKey is null ||
             !long.TryParse(timestampRaw, NumberStyles.None, CultureInfo.InvariantCulture, out var timestampUnixSeconds))
         {
+            Context.Items[AdminObservabilityKeys.AuthFailureReason] = AdminAuthFailureReason.IncompleteHeaders;
             return AuthenticateResult.Fail("Admin authentication headers are incomplete.");
         }
 
         var bodyBytes = await ReadBodyAsync();
         if (bodyBytes is null)
         {
+            Context.Items[AdminObservabilityKeys.AuthFailureReason] = AdminAuthFailureReason.BodyTooLarge;
             return AuthenticateResult.Fail("Admin request body is too large.");
         }
 
@@ -72,25 +75,27 @@ public sealed class AdminAuthenticationHandler(
             idempotencyKey);
 
         var authenticator = Context.RequestServices.GetRequiredService<AdminAuthenticator>();
-        var actor = await authenticator.AuthenticateAsync(
+        var result = await authenticator.AuthenticateAsync(
             proof,
             signature,
             assertionJws,
             DateTimeOffset.UtcNow,
             Context.RequestAborted);
 
-        if (actor is null)
+        if (!result.Succeeded)
         {
+            Context.Items[AdminObservabilityKeys.AuthFailureReason] = result.FailureReason;
             return AuthenticateResult.Fail("Admin authentication failed.");
         }
 
+        var actor = result.Actor!.Value;
         var fingerprint = ComputeSha256Hex(Encoding.UTF8.GetBytes(
             $"{Request.Method}\n{Request.Path.ToString()}{Request.QueryString.ToString()}\n{proof.BodyHash}"));
 
         var identity = new ClaimsIdentity(
             [
-                new Claim(AdminAuthenticationDefaults.ActorSubjectClaim, actor.Value.ActorSubject),
-                new Claim(AdminAuthenticationDefaults.AppIdClaim, actor.Value.AppId),
+                new Claim(AdminAuthenticationDefaults.ActorSubjectClaim, actor.ActorSubject),
+                new Claim(AdminAuthenticationDefaults.AppIdClaim, actor.AppId),
                 new Claim(AdminAuthenticationDefaults.IdempotencyKeyClaim, idempotencyKey),
                 new Claim(AdminAuthenticationDefaults.RequestFingerprintClaim, fingerprint),
             ],
