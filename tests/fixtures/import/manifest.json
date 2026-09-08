@@ -1,0 +1,40 @@
+{
+  "purpose": "Redistributable import fixtures for Rag.Companion adapter and smoke tests. The manifest records origin, license, and SHA-256 for each fixture so integrity is verifiable without trusting the bytes.",
+  "fixtures": [
+    {
+      "name": "sample.txt",
+      "format": "txt",
+      "origin": "Authored for this repository; plain UTF-8 text.",
+      "license": "CC0-1.0",
+      "sha256": "f04d0965e9890f17758abd3b3fe4a45844f9d94d1273294fee67e95ecf214e83"
+    },
+    {
+      "name": "sample.md",
+      "format": "md",
+      "origin": "Authored for this repository; plain UTF-8 Markdown.",
+      "license": "CC0-1.0",
+      "sha256": "614d79e69b77fb9db6fea05aa78c0d6b3b93ef843c2685a4607abf600fc9bffb"
+    },
+    {
+      "name": "sample.docx",
+      "format": "docx",
+      "origin": "Generated minimal WordprocessingML package (Open XML OPC archive).",
+      "license": "CC0-1.0",
+      "sha256": "cc4471949793647457823adcbe3f8bd7878ad50023ded6edb776dd2039ee8703"
+    },
+    {
+      "name": "sample.pdf",
+      "format": "pdf",
+      "origin": "Generated minimal PDF 1.4 with a single Type1 Helvetica text line.",
+      "license": "CC0-1.0",
+      "sha256": "32a5762f16155b743a9fef3921f86140b72586048eacc7bf60be00671276466a"
+    },
+    {
+      "name": "sample.doc",
+      "format": "doc",
+      "origin": "Structural OLE Compound File header (Word 97-2003 magic); exercises the DOC boundary check. It is not a fully extractable Word document; full DOC extraction is validated by the Windows CI smoke against LibreOffice.",
+      "license": "CC0-1.0",
+      "sha256": "e189c31c0681eeddcbe1d8828ebc32acb7f06933c848f8fc983b7c3d1739872e"
+    }
+  ]
+}

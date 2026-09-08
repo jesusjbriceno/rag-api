@@ -1,0 +1,3 @@
+Historical Import Companion sample document.
+
+This plain text file verifies TXT extraction and normalized ingestion.

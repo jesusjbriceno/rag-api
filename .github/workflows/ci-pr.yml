@@ -61,3 +61,97 @@ jobs:
             -o "${RUNNER_TEMP}/actionlint.tar.gz"
           tar -xzf "${RUNNER_TEMP}/actionlint.tar.gz" -C "${RUNNER_TEMP}" actionlint
           "${RUNNER_TEMP}/actionlint" .github/workflows/*.yml
+
+  # The companion is a win-x64 self-contained CLI with a LibreOffice prerequisite.
+  # This job proves the pinned LibreOffice version is present, the companion tests
+  # pass under Windows, and a self-contained single-file win-x64 binary publishes
+  # with verifiable integrity plus an SBOM and third-party notices.
+  companion-windows:
+    name: Validate companion (win-x64)
+    runs-on: windows-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@eef61447b9ff4aafe5dcd4e0bbf5d482be7e7871 # v4.2.1
+        with:
+          persist-credentials: false
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
+        with:
+          global-json-file: global.json
+
+      # Pinned LibreOffice 26.8 x64. The MSI URL and version are pinned; re-verify
+      # the URL and add a SHA-256 checksum before merge (see ci-release for the same).
+      - name: Provision LibreOffice 26.8 x64
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $url = 'https://download.documentfoundation.org/libreoffice/stable/26.8.0/win/x86_64/LibreOffice_26.8.0_Win_x86-64.msi'
+          $msi = Join-Path $env:RUNNER_TEMP 'LibreOffice_26.8.0.msi'
+          Invoke-WebRequest -Uri $url -OutFile $msi
+          Start-Process msiexec.exe -ArgumentList @('/i', $msi, '/qn', '/norestart') -Wait
+
+      - name: Verify LibreOffice version
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $soffice = 'C:\Program Files\LibreOffice\program\soffice.com'
+          if (-not (Test-Path $soffice)) { throw "soffice.com not found at $soffice" }
+          $version = & $soffice --version
+          Write-Host "LibreOffice version: $version"
+          if ($version -notmatch '26\.8') { throw "Expected LibreOffice 26.8 x64, got: $version" }
+
+      - name: Test companion
+        run: dotnet test tests/Rag.Companion.Tests/Rag.Companion.Tests.csproj --configuration Release
+
+      - name: Publish companion (win-x64, self-contained, single-file)
+        run: dotnet publish src/Rag.Companion/Rag.Companion.csproj --configuration Release --runtime win-x64 --self-contained true -p:PublishSingleFile=true -p:PublishTrimmed=false -o "$env:RUNNER_TEMP\publish"
+
+      - name: Emit SBOM and third-party notices
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # SBOM via the CycloneDX .NET global tool (XML output is the default).
+          # Re-verify the pinned tool version and flags before merge.
+          dotnet tool install --global CycloneDX --version 3.1.0
+          dotnet CycloneDX src/Rag.Companion/Rag.Companion.csproj -o "$env:RUNNER_TEMP\sbom"
+          # Deterministic third-party notices for the pinned companion dependencies.
+          $notices = @"
+          Rag.Companion third-party notices
+
+          DocumentFormat.OpenXml 3.5.1 - MIT - https://github.com/dotnet/Open-XML-SDK
+          PdfPig 0.1.16 - Apache-2.0 - https://github.com/UglyToad/PdfPig
+          LibreOffice 26.8 x64 - MPL-2.0 - https://www.libreoffice.org/about-us/licenses/
+          .NET 10 - MIT - https://dot.net
+          "@
+          Set-Content -Path "$env:RUNNER_TEMP\publish\THIRD-PARTY-NOTICES.txt" -Value $notices -Encoding UTF8
+
+      - name: Verify executable and package integrity
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $publish = "$env:RUNNER_TEMP\publish"
+          $exe = Join-Path $publish 'Rag.Companion.exe'
+          if (-not (Test-Path $exe)) { throw 'Rag.Companion.exe is missing from the publish output.' }
+          $zip = "$env:RUNNER_TEMP\Rag.Companion-win-x64.zip"
+          Compress-Archive -Path "$publish\*" -DestinationPath $zip
+          $zipHash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          $exeHash = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          Write-Host "ZIP SHA-256: $zipHash"
+          Write-Host "EXE SHA-256: $exeHash"
+          "ZIP SHA-256: $zipHash" | Out-File -FilePath "$env:RUNNER_TEMP\SHA256SUMS.txt" -Encoding UTF8
+          "EXE SHA-256: $exeHash" | Add-Content -Path "$env:RUNNER_TEMP\SHA256SUMS.txt"
+
+      - name: Upload companion package and evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: rag-companion-win-x64
+          path: |
+            ${{ runner.temp }}/Rag.Companion-win-x64.zip
+            ${{ runner.temp }}/SHA256SUMS.txt
+            ${{ runner.temp }}/sbom/**
+          if-no-files-found: error
+          retention-days: 1
