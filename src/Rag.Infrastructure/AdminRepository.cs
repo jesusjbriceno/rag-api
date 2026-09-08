@@ -50,9 +50,9 @@ public sealed class AdminRepository(IngestionDbContext dbContext) : IAdminReposi
     {
         var operation = _pendingOperation
             ?? throw new InvalidOperationException("No admin operation was reserved.");
-        _pendingOperation = null;
         operation.Complete(safeResult);
         await dbContext.SaveChangesAsync(cancellationToken);
+        _pendingOperation = null;
     }
 
     public async Task AbandonReservedOperationAsync(CancellationToken cancellationToken)

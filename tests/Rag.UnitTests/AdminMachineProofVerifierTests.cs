@@ -48,6 +48,17 @@ public sealed class AdminMachineProofVerifierTests
     }
 
     [Fact]
+    public void Proof_with_an_out_of_range_timestamp_is_rejected()
+    {
+        var options = CreateOptions(CurrentSecret);
+        var verifier = new AdminMachineProofVerifier(options);
+        var now = DateTimeOffset.UtcNow;
+        var proof = CreateProof(now) with { TimestampUnixSeconds = long.MaxValue };
+
+        Assert.False(verifier.Verify(proof, Sign(proof, CurrentSecret), now));
+    }
+
+    [Fact]
     public void Proof_signed_with_the_previous_secret_is_accepted_during_rotation()
     {
         var options = CreateOptions(CurrentSecret, PreviousSecret);

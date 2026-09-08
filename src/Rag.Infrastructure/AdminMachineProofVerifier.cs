@@ -28,7 +28,17 @@ public sealed class AdminMachineProofVerifier(AdminAppAuthOptions options)
             return false;
         }
 
-        if (Math.Abs((now - DateTimeOffset.FromUnixTimeSeconds(proof.TimestampUnixSeconds)).TotalSeconds) > options.ClockSkewSeconds)
+        DateTimeOffset timestamp;
+        try
+        {
+            timestamp = DateTimeOffset.FromUnixTimeSeconds(proof.TimestampUnixSeconds);
+        }
+        catch (ArgumentOutOfRangeException)
+        {
+            return false;
+        }
+
+        if (Math.Abs((now - timestamp).TotalSeconds) > options.ClockSkewSeconds)
         {
             return false;
         }
