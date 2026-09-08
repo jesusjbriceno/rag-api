@@ -3,10 +3,12 @@ using System.Reflection;
 using System.Security.Claims;
 using System.Text;
 using System.Text.Json;
+using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.IdentityModel.Tokens;
+using Rag.Api;
 using Rag.Application;
 using Rag.Infrastructure;
 
@@ -77,6 +79,16 @@ builder.Services.AddAuthorizationBuilder()
     .SetFallbackPolicy(new Microsoft.AspNetCore.Authorization.AuthorizationPolicyBuilder()
         .RequireAuthenticatedUser()
         .Build());
+if (builder.Configuration.GetValue<bool>("AdminPlane:Enabled"))
+{
+    builder.Services.AddAuthentication()
+        .AddScheme<AuthenticationSchemeOptions, AdminAuthenticationHandler>(
+            AdminAuthenticationDefaults.AuthenticationScheme, _ => { });
+    builder.Services.AddAuthorizationBuilder()
+        .AddPolicy("AdminPlane", policy => policy
+            .AddAuthenticationSchemes(AdminAuthenticationDefaults.AuthenticationScheme)
+            .RequireAuthenticatedUser());
+}
 builder.Services.AddRateLimiter(options =>
 {
     options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
@@ -94,6 +106,10 @@ app.UseExceptionHandler(errorApp => errorApp.Run(context =>
     Results.Problem(statusCode: StatusCodes.Status500InternalServerError, title: "Internal server error").ExecuteAsync(context)));
 app.UseAuthentication();
 app.UseRateLimiter();
+if (builder.Configuration.GetValue<bool>("AdminPlane:Enabled"))
+{
+    app.UseMiddleware<AdminObservabilityMiddleware>();
+}
 app.UseAuthorization();
 
 app.MapHealthChecks("/api/v1/health/live", new HealthCheckOptions
@@ -232,6 +248,11 @@ app.MapPost("/api/v1/retrieval:search", async (HttpContext context, SemanticRetr
             return ApiEndpointSupport.InvalidInput();
         }
     });
+
+if (builder.Configuration.GetValue<bool>("AdminPlane:Enabled"))
+{
+    app.MapAdminEndpoints();
+}
 
 app.Run();
 

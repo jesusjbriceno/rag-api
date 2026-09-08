@@ -52,6 +52,47 @@ public static class InfrastructureServiceCollectionExtensions
             .Bind(configuration.GetSection(JwtOptions.SectionName))
             .Validate(options => TryValidateJwtOptions(options, out _), "JWT authentication configuration is invalid.")
             .ValidateOnStart();
+        if (configuration.GetValue<bool>("AdminPlane:Enabled"))
+        {
+            services.AddOptions<AdminAssertionOptions>()
+                .Bind(configuration.GetSection(AdminAssertionOptions.SectionName))
+                .Validate(options => TryValidateAdminAssertionOptions(options, out _), "Admin assertion authentication configuration is invalid.")
+                .ValidateOnStart();
+            services.AddOptions<AdminAppAuthOptions>()
+                .Bind(configuration.GetSection(AdminAppAuthOptions.SectionName))
+                .Validate(options => TryValidateAdminAppAuthOptions(options, out _), "Admin app machine authentication configuration is invalid.")
+                .ValidateOnStart();
+            services.AddOptions<AdminAuditOptions>()
+                .Bind(configuration.GetSection(AdminAuditOptions.SectionName))
+                .Validate(options => TryValidateAdminAuditOptions(options, out _), "Admin audit retention configuration is invalid.")
+                .ValidateOnStart();
+            services.AddOptions<AdminOperationsOptions>()
+                .Bind(configuration.GetSection(AdminOperationsOptions.SectionName))
+                .Validate(options => TryValidateAdminOperationsOptions(options, out _), "Admin operations retention configuration is invalid.")
+                .ValidateOnStart();
+            services.AddHostedService<AdminRetentionWorker>();
+            services.AddSingleton(serviceProvider => new AdminAssertionKeyRing(
+                serviceProvider.GetRequiredService<IOptions<AdminAssertionOptions>>().Value));
+            services.AddSingleton(serviceProvider => new AdminAssertionValidator(
+                serviceProvider.GetRequiredService<IOptions<AdminAssertionOptions>>().Value,
+                serviceProvider.GetRequiredService<AdminAssertionKeyRing>()));
+            services.AddSingleton(serviceProvider => new AdminMachineProofVerifier(
+                serviceProvider.GetRequiredService<IOptions<AdminAppAuthOptions>>().Value));
+            services.AddScoped<IAdminAssertionReplayRepository, AdminReplayRepository>();
+            services.AddScoped<AdminAuthenticator>();
+        }
+
+        services.AddScoped<IAdminRepository, AdminRepository>();
+        services.AddScoped<CreateClientHandler>();
+        services.AddScoped<ListClientsHandler>();
+        services.AddScoped<GetClientDetailHandler>();
+        services.AddScoped<IssueCredentialHandler>();
+        services.AddScoped<ListCredentialsHandler>();
+        services.AddScoped<GetCredentialHandler>();
+        services.AddScoped<RotateCredentialHandler>();
+        services.AddScoped<RevokeCredentialHandler>();
+        services.AddScoped<ListAuditHandler>();
+
         services.AddSingleton(serviceProvider => new JwtKeyMaterial(serviceProvider.GetRequiredService<IOptions<JwtOptions>>().Value));
         services.AddScoped<IIngestionRepository, IngestionRepository>();
         services.AddScoped<ICollectionCommandRepository, OwnedCollectionRepository>();
@@ -112,6 +153,67 @@ public static class InfrastructureServiceCollectionExtensions
             return true;
         }
         catch (Exception caught) when (caught is ArgumentException or InvalidOperationException or System.Security.Cryptography.CryptographicException)
+        {
+            exception = caught;
+            return false;
+        }
+    }
+
+    private static bool TryValidateAdminAssertionOptions(AdminAssertionOptions options, out Exception? exception)
+    {
+        try
+        {
+            options.Validate();
+            using var keyRing = new AdminAssertionKeyRing(options);
+            exception = null;
+            return true;
+        }
+        catch (Exception caught) when (caught is ArgumentException or InvalidOperationException or System.Security.Cryptography.CryptographicException)
+        {
+            exception = caught;
+            return false;
+        }
+    }
+
+    private static bool TryValidateAdminAppAuthOptions(AdminAppAuthOptions options, out Exception? exception)
+    {
+        try
+        {
+            options.Validate();
+            exception = null;
+            return true;
+        }
+        catch (Exception caught) when (caught is ArgumentException or InvalidOperationException)
+        {
+            exception = caught;
+            return false;
+        }
+    }
+
+    private static bool TryValidateAdminAuditOptions(AdminAuditOptions options, out Exception? exception)
+    {
+        try
+        {
+            options.Validate();
+            exception = null;
+            return true;
+        }
+        catch (Exception caught) when (caught is ArgumentException or InvalidOperationException)
+        {
+            exception = caught;
+            return false;
+        }
+    }
+
+    private static bool TryValidateAdminOperationsOptions(AdminOperationsOptions options, out Exception? exception)
+    {
+        try
+        {
+            options.Validate();
+            exception = null;
+            return true;
+        }
+        catch (Exception caught) when (caught is ArgumentException or InvalidOperationException)
         {
             exception = caught;
             return false;

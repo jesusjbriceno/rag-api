@@ -243,6 +243,15 @@ public static class ApplicationServiceCollectionExtensions
         services.AddScoped<CollectionOwnershipOperator>();
         services.AddScoped<CreateCollectionHandler>();
         services.AddScoped<GetOperationStatusHandler>();
+        services.AddScoped<CreateClientHandler>();
+        services.AddScoped<ListClientsHandler>();
+        services.AddScoped<GetClientDetailHandler>();
+        services.AddScoped<IssueCredentialHandler>();
+        services.AddScoped<ListCredentialsHandler>();
+        services.AddScoped<GetCredentialHandler>();
+        services.AddScoped<RotateCredentialHandler>();
+        services.AddScoped<RevokeCredentialHandler>();
+        services.AddScoped<ListAuditHandler>();
         return services;
     }
 }

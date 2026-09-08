@@ -23,6 +23,12 @@ public sealed class IngestionDbContext(DbContextOptions<IngestionDbContext> opti
 
     public DbSet<ClientCredential> ClientCredentials => Set<ClientCredential>();
 
+    public DbSet<AdminAuditEvent> AdminAuditEvents => Set<AdminAuditEvent>();
+
+    public DbSet<AdminOperation> AdminOperations => Set<AdminOperation>();
+
+    public DbSet<AdminAssertionReplay> AdminAssertionReplays => Set<AdminAssertionReplay>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.HasPostgresExtension("vector");
@@ -157,6 +163,7 @@ public sealed class IngestionDbContext(DbContextOptions<IngestionDbContext> opti
             builder.ToTable("service_clients");
             builder.HasKey(client => client.Id);
             builder.Property(client => client.Name).HasMaxLength(200).IsRequired();
+            builder.Property(client => client.Description).HasMaxLength(500);
             builder.Property(client => client.CreatedAt).IsRequired();
             builder.HasIndex(client => client.Name).IsUnique();
         });
@@ -172,6 +179,8 @@ public sealed class IngestionDbContext(DbContextOptions<IngestionDbContext> opti
             builder.Property(credential => credential.Version).IsConcurrencyToken().IsRequired();
             builder.Property(credential => credential.Status).HasConversion<string>().HasMaxLength(20).IsRequired();
             builder.Property(credential => credential.CreatedAt).IsRequired();
+            builder.Property(credential => credential.Description).HasMaxLength(500);
+            builder.Property(credential => credential.LastRotatedAt);
             builder.HasIndex(credential => credential.KeyId).IsUnique();
             builder.HasIndex(credential => new { credential.ServiceClientId, credential.Status });
             builder.ToTable(table => table.HasCheckConstraint(
@@ -190,6 +199,50 @@ public sealed class IngestionDbContext(DbContextOptions<IngestionDbContext> opti
                 .WithMany()
                 .HasForeignKey(credential => credential.ServiceClientId)
                 .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<AdminAuditEvent>(builder =>
+        {
+            builder.ToTable("admin_audit_events");
+            builder.HasKey(auditEvent => auditEvent.Id);
+            builder.Property(auditEvent => auditEvent.ActorSubject).HasMaxLength(200).IsRequired();
+            builder.Property(auditEvent => auditEvent.AppId).HasMaxLength(100).IsRequired();
+            builder.Property(auditEvent => auditEvent.Action).HasMaxLength(100).IsRequired();
+            builder.Property(auditEvent => auditEvent.Outcome).HasMaxLength(100).IsRequired();
+            builder.Property(auditEvent => auditEvent.OccurredAt).IsRequired();
+            builder.Property(auditEvent => auditEvent.TargetType).HasMaxLength(50);
+            builder.Property(auditEvent => auditEvent.TargetId).HasMaxLength(100);
+            builder.Property(auditEvent => auditEvent.Operation).HasMaxLength(100);
+            builder.Property(auditEvent => auditEvent.AllowlistedJson).HasMaxLength(4_000);
+            builder.HasIndex(auditEvent => new { auditEvent.OccurredAt, auditEvent.Id });
+            builder.HasIndex(auditEvent => new { auditEvent.TargetType, auditEvent.TargetId, auditEvent.OccurredAt });
+        });
+
+        modelBuilder.Entity<AdminOperation>(builder =>
+        {
+            builder.ToTable("admin_operations");
+            builder.HasKey(operation => operation.Id);
+            builder.Property(operation => operation.AppId).HasMaxLength(100).IsRequired();
+            builder.Property(operation => operation.IdempotencyKey).HasMaxLength(100).IsRequired();
+            builder.Property(operation => operation.Fingerprint).HasMaxLength(512).IsRequired();
+            builder.Property(operation => operation.State).HasMaxLength(50).IsRequired();
+            builder.Property(operation => operation.SafeResult).HasMaxLength(4_000);
+            builder.Property(operation => operation.CreatedAt).IsRequired();
+            builder.HasIndex(operation => new { operation.AppId, operation.IdempotencyKey }).IsUnique();
+            builder.HasIndex(operation => operation.CreatedAt);
+        });
+
+        modelBuilder.Entity<AdminAssertionReplay>(builder =>
+        {
+            builder.ToTable("admin_assertion_replays");
+            builder.HasKey(replay => replay.Id);
+            builder.Property(replay => replay.Issuer).HasMaxLength(200).IsRequired();
+            builder.Property(replay => replay.Jti).HasMaxLength(200).IsRequired();
+            builder.Property(replay => replay.AppId).HasMaxLength(100).IsRequired();
+            builder.Property(replay => replay.ExpiresAt).IsRequired();
+            builder.Property(replay => replay.CreatedAt).IsRequired();
+            builder.HasIndex(replay => new { replay.Issuer, replay.Jti }).IsUnique();
+            builder.HasIndex(replay => replay.ExpiresAt);
         });
     }
 }
