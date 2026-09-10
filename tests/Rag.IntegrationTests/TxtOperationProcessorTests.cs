@@ -52,6 +52,45 @@ public sealed class TxtOperationProcessorTests(PostgreSqlFixture fixture)
     }
 
     [Fact]
+    public async Task Records_chunk_queue_and_embedding_timings_for_a_completed_operation()
+    {
+        var options = CreateOptions();
+        await ResetDatabaseAsync(options);
+        var rootPath = Path.Combine(Path.GetTempPath(), $"rag-content-store-{Guid.NewGuid():N}");
+        try
+        {
+            var content = Encoding.UTF8.GetBytes($"{new string('a', 1_800)}\r\n\r\n{new string('b', 500)}");
+            var setup = await AddClaimedOperationAsync(options, rootPath, content, "worker-a");
+
+            var telemetry = new HistoricalTelemetry();
+            telemetry.Begin(setup.Operation.Id, OperationWorkloadClass.RealTime);
+            telemetry.RecordQueueWait(setup.Operation.Id, TimeSpan.FromSeconds(2));
+
+            var disposition = await CreateProcessor(options, rootPath, telemetry: telemetry)
+                .ProcessAsync(setup.Operation, CancellationToken.None);
+
+            Assert.Equal(OperationProcessingDisposition.Succeeded, disposition);
+            var sample = Assert.Single(telemetry.Snapshot().Samples);
+            Assert.Equal(setup.Operation.Id, sample.OperationId);
+            Assert.Equal(OperationWorkloadClass.RealTime, sample.WorkloadClass);
+            Assert.Equal(TimeSpan.FromSeconds(2), sample.QueueWait);
+            Assert.Equal(2, sample.ChunkCount);
+            Assert.Equal(1, sample.EmbeddingRequestCount);
+            Assert.True(sample.ChunkingDuration >= TimeSpan.Zero);
+            Assert.True(sample.EmbeddingDuration >= TimeSpan.Zero);
+            Assert.True(sample.IndexingDuration >= TimeSpan.Zero);
+            Assert.Equal(OperationTerminalState.Succeeded, sample.TerminalState);
+        }
+        finally
+        {
+            if (Directory.Exists(rootPath))
+            {
+                Directory.Delete(rootPath, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
     public async Task Invalid_utf8_content_marks_the_claimed_operation_failed_with_a_parse_stage()
     {
         var options = CreateOptions();
@@ -229,12 +268,14 @@ public sealed class TxtOperationProcessorTests(PostgreSqlFixture fixture)
     private TxtOperationProcessor CreateProcessor(
         DbContextOptions<IngestionDbContext> options,
         string rootPath,
-        IEmbeddingProvider? embeddingProvider = null) => new(
+        IEmbeddingProvider? embeddingProvider = null,
+        HistoricalTelemetry? telemetry = null) => new(
         new OperationCompletionRepository(new TestDbContextFactory(options)),
         new FileSystemImmutableContentStore(rootPath),
         new TxtChunker(),
         embeddingProvider ?? new DeterministicEmbeddingProvider(),
-        NullLogger<TxtOperationProcessor>.Instance);
+        NullLogger<TxtOperationProcessor>.Instance,
+        telemetry ?? new HistoricalTelemetry());
 
     private DbContextOptions<IngestionDbContext> CreateOptions() =>
         new DbContextOptionsBuilder<IngestionDbContext>()
