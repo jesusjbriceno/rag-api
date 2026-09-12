@@ -7,7 +7,7 @@ public sealed class CandidateClassifierTests
 {
     public static TheoryData<CandidateDiscovery, string, string?> Cases => new()
     {
-        { new CandidateDiscovery("a.doc", 5, false, null), EligibilityCodes.Eligible, null },
+        { new CandidateDiscovery("a.doc", 5, false, null), EligibilityCodes.UnsupportedFormat, ".doc" },
         { new CandidateDiscovery("b.docx", 5, false, null), EligibilityCodes.Eligible, null },
         { new CandidateDiscovery("c.md", 5, false, null), EligibilityCodes.Eligible, null },
         { new CandidateDiscovery("d.pdf", 5, false, null), EligibilityCodes.Eligible, null },

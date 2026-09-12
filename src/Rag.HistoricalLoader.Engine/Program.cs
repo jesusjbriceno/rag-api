@@ -102,9 +102,11 @@ internal static class HistoricalLoaderProgram
 
             var options = new ProbeOptions();
             var databasePath = new HistoricalLoaderOptions().DatabasePath;
+            string? companionAssemblyPath = null;
             for (var i = 3; i < args.Length; i++)
             {
                 if (args[i] == "--db" && i + 1 < args.Length) databasePath = args[++i];
+                else if (args[i] == "--companion" && i + 1 < args.Length) companionAssemblyPath = args[++i];
                 else if (args[i] == "--adapter" && i + 1 < args.Length) options = options with { AdapterName = args[++i] };
                 else if (args[i] == "--sustained" && i + 1 < args.Length) options = options with { SustainedDuration = TimeSpan.Parse(args[++i]) };
                 else if (args[i] == "--sampling-interval" && i + 1 < args.Length) options = options with { SamplingInterval = TimeSpan.Parse(args[++i]) };
@@ -116,7 +118,7 @@ internal static class HistoricalLoaderProgram
             }
 
             var engine = new HistoricalLoaderEngine();
-            var result = await engine.RunBenchmarkExtractionAsync(new BenchmarkExtractionRequest(databasePath, sampleSetId, options));
+            var result = await engine.RunBenchmarkExtractionAsync(new BenchmarkExtractionRequest(databasePath, sampleSetId, options, companionAssemblyPath));
             Console.WriteLine($"benchmark complete: {result.ObservationCount} observations; count={result.Report.Count}, errors={result.Report.Errors}, timeouts={result.Report.Timeouts}, hangs={result.Report.Hangs}, sustained_satisfied={result.Report.SustainedReliabilitySatisfied}");
             return result.Report.SustainedReliabilitySatisfied ? 0 : 1;
         }
@@ -134,7 +136,7 @@ internal static class HistoricalLoaderProgram
         Console.Error.WriteLine("usage: Rag.HistoricalLoader.Engine <inventory|select-sample|benchmark> ...");
         Console.Error.WriteLine("  inventory --db <path> --out <dir> --root <label=path> [--max-bytes <n>]");
         Console.Error.WriteLine("  select-sample <manifest-id> --db <path> --budget <n> --seed <s> [--min-per-stratum <n>] [--coverage-rules <json>] [--size-bands <n>]");
-        Console.Error.WriteLine("  benchmark extraction <sample-set-id> --db <path> [--adapter <name>] [--sustained <hh:mm:ss>] [--sampling-interval <hh:mm:ss>] [--budget <n>] [--min-per-stratum <n>] [--confidence <json>] [--max-error-rate <r>] [--max-timeout-hang-rate <r>]");
+        Console.Error.WriteLine("  benchmark extraction <sample-set-id> --db <path> [--companion <assembly-path>] [--adapter <name>] [--sustained <hh:mm:ss>] [--sampling-interval <hh:mm:ss>] [--budget <n>] [--min-per-stratum <n>] [--confidence <json>] [--max-error-rate <r>] [--max-timeout-hang-rate <r>]");
         return 2;
     }
 }

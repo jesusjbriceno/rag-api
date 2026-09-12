@@ -15,7 +15,7 @@ public sealed record ClassificationResult(string EligibilityCode, string? Discov
 
 public sealed class CandidateClassifier
 {
-    private static readonly string[] SupportedExtensions = [".doc", ".docx", ".md", ".pdf", ".txt"];
+    private static readonly string[] SupportedExtensions = [".docx", ".md", ".pdf", ".txt"];
 
     private readonly long _maxByteSize;
 

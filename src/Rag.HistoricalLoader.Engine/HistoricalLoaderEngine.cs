@@ -69,32 +69,51 @@ public sealed class HistoricalLoaderEngine : IHistoricalLoaderEngine
             var (sampleSet, members) = await LoadSampleSetAsync(request.DatabasePath, request.SampleSetId, cancellationToken);
             var snapshot = await new ManifestSnapshotReader().LoadAsync(request.DatabasePath, sampleSet.ManifestId, cancellationToken);
             var candidatesByManifest = snapshot.Candidates.ToDictionary(c => c.Id);
-            var probeCandidates = members
-                .Select(member => new BenchmarkCandidate(
-                    member.CandidateId,
-                    member.StratumKey,
-                    candidatesByManifest[member.CandidateId].ByteSize))
-                .ToList();
+
+            var realExtraction = !string.IsNullOrWhiteSpace(request.CompanionAssemblyPath);
+            List<BenchmarkCandidate> probeCandidates;
+            if (realExtraction)
+            {
+                var resolved = await new BenchmarkSourcePathResolver().ResolveAsync(request.DatabasePath, request.SampleSetId, cancellationToken);
+                probeCandidates = resolved
+                    .Select(m => new BenchmarkCandidate(m.CandidateId, m.StratumKey, candidatesByManifest[m.CandidateId].ByteSize, m.LocalPath))
+                    .ToList();
+                options = options with
+                {
+                    AdapterName = "companion-reflection",
+                    Configuration = "real local extraction via companion reflection; content and source paths are never persisted",
+                };
+            }
+            else
+            {
+                probeCandidates = members
+                    .Select(member => new BenchmarkCandidate(
+                        member.CandidateId,
+                        member.StratumKey,
+                        candidatesByManifest[member.CandidateId].ByteSize))
+                    .ToList();
+            }
+
+            using var companion = realExtraction ? new ReflectionCompanionExtractor(request.CompanionAssemblyPath!) : null;
+            CandidatePhase extractPhase = realExtraction
+                ? RealExtractionPhases.Extract(companion!)
+                : ReferenceBenchmarkPhases.Extract;
+
+            await using var store = new BenchmarkObservationStore(request.DatabasePath);
+            await store.InitializeAsync(cancellationToken);
 
             var probe = new ExtractionProbe(options);
             var run = await probe.RunAsync(
                 probeCandidates,
                 ReferenceBenchmarkPhases.Discover,
                 ReferenceBenchmarkPhases.Snapshot,
-                ReferenceBenchmarkPhases.Extract,
+                extractPhase,
                 ReferenceBenchmarkPhases.Stage,
                 ReferenceBenchmarkPhases.SampleResource,
+                store.SaveObservationAsync,
                 cancellationToken);
 
             var report = BenchmarkReportBuilder.Build(run, options);
-
-            await using var store = new BenchmarkObservationStore(request.DatabasePath);
-            await store.InitializeAsync(cancellationToken);
-            foreach (var observation in run.Observations)
-            {
-                await store.SaveObservationAsync(observation, cancellationToken);
-            }
-
             await store.SaveReportAsync(report, cancellationToken);
 
             return new BenchmarkExtractionResult(report, run.Observations.Count);

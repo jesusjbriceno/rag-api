@@ -125,13 +125,25 @@ public sealed class ExtractionProbeTests
         var options = Options() with { SustainedDuration = TimeSpan.FromMilliseconds(10) };
         var probe = new ExtractionProbe(options, clock);
         var candidates = Enumerable.Range(0, 4).Select(_ => new BenchmarkCandidate(Guid.NewGuid(), ".docx|1", 100)).ToArray();
+        var streamed = new List<BenchmarkObservation>();
         CandidatePhase step = (c, _) =>
         {
             clock.Advance(TimeSpan.FromMilliseconds(1));
             return Task.FromResult(new PhaseResult(100, "completed", null));
         };
 
-        var run = await probe.RunAsync(candidates, step, step, step, step, _ => new ResourceSnapshot(1, 1, 1, 0, clock.Elapsed));
+        var run = await probe.RunAsync(
+            candidates,
+            step,
+            step,
+            step,
+            step,
+            _ => new ResourceSnapshot(1, 1, 1, 0, clock.Elapsed),
+            (observation, _) =>
+            {
+                streamed.Add(observation);
+                return Task.CompletedTask;
+            });
         var report = BenchmarkReportBuilder.Build(run, options);
 
         Assert.True(report.SustainedReliabilitySatisfied);
@@ -139,6 +151,7 @@ public sealed class ExtractionProbeTests
         Assert.Equal(0, report.Errors);
         Assert.Equal(0, report.Timeouts);
         Assert.Equal(0, report.Hangs);
+        Assert.Equal(run.Observations, streamed);
     }
 
     [Fact]

@@ -35,6 +35,7 @@ public sealed class ExtractionProbe
         CandidatePhase extract,
         CandidatePhase stage,
         ResourceSampler sampler,
+        Func<BenchmarkObservation, CancellationToken, Task>? observationSink = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(candidates);
@@ -52,7 +53,12 @@ public sealed class ExtractionProbe
             foreach (var candidate in candidates)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                observations.Add(await ProbeOneAsync(candidate, discover, snapshot, extract, stage, sampler, cancellationToken));
+                var observation = await ProbeOneAsync(candidate, discover, snapshot, extract, stage, sampler, cancellationToken);
+                observations.Add(observation);
+                if (observationSink is not null)
+                {
+                    await observationSink(observation, cancellationToken).ConfigureAwait(false);
+                }
             }
 
             if (_clock.Elapsed - started >= _options.SustainedDuration)

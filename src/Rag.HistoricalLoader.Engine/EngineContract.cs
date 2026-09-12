@@ -38,7 +38,8 @@ public sealed record SelectSampleResult(SampleSelectionResult Selection);
 public sealed record BenchmarkExtractionRequest(
     string DatabasePath,
     Guid SampleSetId,
-    ProbeOptions Options);
+    ProbeOptions Options,
+    string? CompanionAssemblyPath = null);
 
 public sealed record BenchmarkExtractionResult(BenchmarkReport Report, int ObservationCount);
 

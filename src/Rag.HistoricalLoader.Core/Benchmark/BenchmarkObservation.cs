@@ -8,7 +8,7 @@ public enum BenchmarkOutcome
     Hang,
 }
 
-public sealed record BenchmarkCandidate(Guid CandidateId, string StratumKey, long SourceBytes);
+public sealed record BenchmarkCandidate(Guid CandidateId, string StratumKey, long SourceBytes, string? SourcePath = null);
 
 public sealed record PhaseResult(long Bytes, string Outcome, string? ErrorCode);
 
