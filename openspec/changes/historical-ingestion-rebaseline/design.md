@@ -85,6 +85,99 @@ The desktop shell never traverses source folders, opens SQLite, handles reusable
 | Concurrency, sample size, accepted text size, throughput, and capacity | Defer numeric values. | Inventory and benchmark reports must establish them. The proof begins at concurrency one and changes only during recorded benchmark sweeps. |
 | Cloudflare configuration details | Defer exact policy/product configuration to the staging work unit. | The required logical boundary is defined below, but the repository does not currently deliver Cloudflare integration. |
 
+## Unit 11.prev — Headless local control prerequisite
+
+### Decision and evidence
+
+Insert **Unit 11.prev after Unit 10 and before Unit 11**. It delivers the engine-side control service and named-pipe contract, not a desktop shell. This supersedes the exploration's recommendation to begin with Desktop-local contract DTOs: settle one transport-neutral contract first, so the later shell cannot invent an incompatible engine dependency. Unit 11 acceptance remains blocked until this prerequisite is verified; it does not replace Windows operator or Gate L evidence.
+
+Inputs read for this amendment: `proposal.md`, `specs/historical-ingestion/spec.md`, this design, `tasks.md`, and `explore-unit-11.md`. Direct code inspection confirms:
+
+- `Engine/EngineContract.cs` currently exposes inventory, sampling, and extraction benchmark methods, not run control. Its request types contain local paths and Core types and must not become pipe payloads.
+- `Engine/NamedPipeHost.cs` is a non-listening stub; `Engine/Program.cs` has no control-host command.
+- `Engine/Pipeline/HistoricalPipeline.cs` exposes `RunAsync`, `RequestPauseAsync`, and `ResumeAsync`; the new service must compose these, not duplicate their lifecycle/retry logic.
+- `Core/Lifecycle/Model.cs` separates desired state, six observed run states, and fifteen document states. These are not one ten-value UI status enum.
+- `Core/Lifecycle/SqliteRunStore.cs` serializes access through `SqliteStore`; its current run setters are separate writes. Atomic command/audit/receipt and coherent snapshot queries are new required store operations, not existing guarantees inferred from those setters.
+
+Paths in these evidence bullets are relative to `src/Rag.HistoricalLoader.*` as named. CodeGraph/terminal tools were unavailable for this amendment; evidence is from direct file reads, with no build or runtime claim. The exploration identifies Ubuntu solution CI; its blanket claim that WPF cannot be cross-compiled on Linux is not adopted. Regardless of cross-targeting capability, Windows desktop execution/automation is not Linux evidence.
+
+### Ownership and dependency direction
+
+Proposed dependency graph (new paths are implementation targets, not created artifacts):
+
+```text
+future Desktop view-models / pipe client -> Rag.HistoricalLoader.Contracts (net10.0)
+Engine control host                    -> Rag.HistoricalLoader.Contracts
+Engine control service                 -> existing Pipeline + Core stores
+future Windows WPF executable           -> Desktop view-models / pipe client
+```
+
+`Rag.HistoricalLoader.Contracts` contains only versioned DTOs, stable wire values, and a transport-neutral `ILoaderControlClient` seam. It has no Engine/Core, SQLite, HTTP, credential, filesystem, or WPF dependency. The later shell references this contract instead of duplicating Desktop-local wire models. Internal `IHistoricalLoaderEngine` methods remain compatible; do not expose their path-bearing inputs over IPC.
+
+The engine exclusively owns approved batch lookup, database/staging paths, extractor/API composition, credential access, pipeline lifetime, durable commands, and audit projections. The pipe dispatcher validates and delegates; it owns no ingestion policy. Unit 11.prev consumes existing prepared batches; it does not add batch preparation, inventory traversal commands, credential provisioning, or arbitrary configuration editing to the wire protocol. Inventory snapshots show persisted totals only.
+
+### Version 1 local protocol
+
+Use Windows named pipes, byte mode, asynchronously read/written. Each frame is a four-byte unsigned little-endian byte length followed by UTF-8 JSON. Version 1 limits frames to 1 MiB, JSON depth to 16, and a requested page to 100 rows; reject invalid lengths before allocation. These are IPC safety limits, not ingestion capacity claims. Apply cancellable bounded read/write deadlines and bounded connection/request counts; implementation records explicit defaults and tests saturation. No newline framing, binary object serialization, arbitrary type names, or raw exception payloads.
+
+Every request contains `protocol_version: 1`, UUID `request_id`, an allowlisted `operation`, and its typed payload. Every response echoes version/request ID and carries `status` (`ok`, `accepted`, `rejected`), a stable optional `error_code`, and a typed payload. UTC timestamps use ISO-8601; identifiers are opaque strings/UUIDs, states use explicit snake-case strings rather than CLR enum ordinals. Unknown versions/operations or malformed required fields fail closed before dispatch; optional additive fields may be ignored. Breaking field/state/semantic changes require a new protocol version. `hello` must succeed before other operations and returns supported versions, capabilities, installation ID, engine-instance ID (new each process), and transport limits. Unsupported clients receive `unsupported_version`, never an implicit downgrade.
+
+| Operation | Payload and result | Required semantics |
+| --- | --- | --- |
+| `start` | `command_id`, operator-approved `batch_id`, caller-generated `run_id`; returns durable command receipt and run ID | Resolve batch and secret-free configuration inside engine; validate approval/target/capacity before atomically creating run/documents, start audit, and receipt. One active run per installation. Already-existing run with conflicting batch is rejected. |
+| `pause` | `command_id`, `run_id`; returns receipt and desired/observed state | Commit pause intent and operator audit before `accepted`; do not wait for drain on the request thread. Acknowledgement is not a confirmed checkpoint. |
+| `resume` | `command_id`, `run_id`; returns receipt and current state | Only eligible paused/recovered work resumes after reconciliation. Preserve attempts and terminal outcomes. Blocked auth/operator conditions require engine-side validation of correction, not a wire flag bypass. |
+| `get_state` | Optional `run_id`; returns bounded summary snapshot | Include inventory totals/completeness, selected run desired/observed state, document counts by state, checkpoint time, safe block code, engine-instance ID, and durable event high-water mark. No run is an explicit empty result. |
+| `get_documents` | `run_id`, bounded page/cursor | Candidate/run-document IDs, document state, per-operation attempt counts, safe classification/timestamps only; never source key/path, extracted text, configuration JSON, or secret material. |
+| `get_events` | Optional run filter, exclusive `after_event_id`, page limit, optional fixed `through_event_id` | Ordered durable audit/event page with next cursor and high-water mark. Bounded pull-based event snapshots are the v1 event feed; no unbounded push subscription. |
+
+A future client may implement `SubscribeAsync` by polling `get_events`; a push protocol is not required in 11.prev. Event fields are limited to durable event ID, UTC time, run/candidate IDs, allowlisted action/state transition/outcome/classification, attempt number, and allowlisted numeric measurements. Do not serialize domain objects or free-form diagnostic messages. Snapshot error fields use the same allowlist; persisted `ConfigurationSnapshot` and raw audit payloads are never forwarded.
+
+### Commands, concurrency, recovery, and snapshots
+
+1. A single engine instance holds an OS-backed exclusive installation lock before opening the store or pipe. A second instance fails safely without taking over; a pipe-name collision also fails closed. One supervised pipeline task runs at a time. Command serialization covers short validation/transactions, never the awaited entire `RunAsync`, so pause remains serviceable.
+2. Persist `command_id`, normalized operation/IDs fingerprint, run ID, and safe receipt in an additive loader-local command table. Commit command mutation, receipt, and operator audit together through the single writer. Repeating the same command returns its durable receipt without another start or duplicate audit; changed fingerprint returns `command_conflict`. Unknown `run_id`, invalid transition, or active-run contention returns a stable rejection, not a new run. Do not persist the raw request.
+3. After commit, the host supervises pipeline scheduling independently of the client connection. A disconnect cancels only IPC work, not ingestion or an accepted command. A lost reply is recovered by replaying the same command ID and reading state, never by generating a replacement start. Process startup reconciles unfinished work/accepted intents but waits for explicit resume before dispatching ingestion; receipt replay itself must not restart a recovered run.
+4. Pause commits desired `pause_requested`; expose `pausing` while draining and `paused` only after the durable safe-boundary check. Resume uses the existing reconciliation and attempt accounting. A pipeline method returning is not proof all documents loaded: derive counts and outstanding `remote_pending` from durable rows, even if observed run state says completed. No scheduler-local result counters are authoritative UI counts.
+5. `get_state` reads totals, run state, counts, and event high-water mark in one bounded coherent store read transaction. Events through that mark are committed; subsequent pages use that mark as an upper bound. Document pages are individually coherent current-state pages, not an immutable corpus-wide snapshot; clients refresh summary after paging rather than summing pages as authoritative totals.
+6. Event IDs are durable monotonic cursor values scoped to an installation, not per-process sequence numbers. Polling is at-least-once from the client's acknowledged cursor; clients deduplicate by event ID. A new engine-instance ID triggers state refresh, not counter reset. If retention/restore invalidates a cursor, return `resync_required` and require a fresh snapshot; never silently skip an audit gap. Active-run audit is not pruned by this unit.
+7. Host shutdown requests a safe pause and drains within a configured timeout. Timeout/kill leaves recovery work, not fabricated `paused` or `loaded`. Storage failure yields a safe unavailable/error response and blocks mutation acknowledgement; an undurable success is never sent. Persistent process faults and safe error codes are surfaced without raw exception text.
+
+### Local security and Linux boundary
+
+The production pipe is local-machine/current-user only, with owner-restricted ACLs and explicit rejection of remote clients; validate the Windows implementation rather than assuming a pipe name is authorization. Derive the endpoint from a fixed prefix plus opaque installation/user identity (no source paths). Do not accept a caller-selected pipe/database path over IPC. Verify peer identity on both connection ends where needed to reject foreign-user endpoint substitution. Fail closed if ACL/identity enforcement is unavailable; never fall back to localhost TCP, a public pipe, or anonymous access. Same-user compromise is outside this isolation boundary; it is not protection against malicious code already executing as the operator.
+
+Core service/codec/contract tests remain `net10.0` and run on Linux with fake transport, extractor, API, and credential seams. The production Windows pipe factory is guarded by an OS check; Linux production invocation returns `platform_not_supported` before touching Windows credentials or starting ingestion. Portable pipe/framing tests on Linux do not prove Windows ACL enforcement. Windows acceptance must separately prove same-user connection and foreign-user/remote denial.
+
+**Excluded from 11.prev:** WPF/XAML, Desktop/view-model projects, Windows UI automation, Windows-targeted project references, CI workflow changes, deployment, real corpus runs, API/server migrations, and changes to Companion/AdminApp/real-time ingestion. Keep all existing projects and default `Rag.sln` restore/build/test on Linux viable. Only additive registration of the portable Contracts library and references is planned. No `EnableWindowsTargeting`, `UseWPF`, Windows desktop runtime, or conditional omission of tests enters the default solution in this unit. The future WPF executable requires its own Windows build/evidence decision; fakes cannot satisfy operator acceptance.
+
+### Projected changes and validation gate
+
+| Proposed surface | Change |
+| --- | --- |
+| `src/Rag.HistoricalLoader.Contracts/` (new) | `net10.0` DTOs, protocol version/state constants, control-client seam; no platform/storage dependencies. |
+| `src/Rag.HistoricalLoader.Engine/Control/` (new) | Control service, safe projections, codec/dispatcher, host supervision, Windows transport factory with test seam. |
+| `src/Rag.HistoricalLoader.Engine/NamedPipeHost.cs`, `Program.cs`, Engine project file | Replace stub and add explicit `serve` composition entry point; preserve existing CLI commands and internal contract. |
+| `src/Rag.HistoricalLoader.Core/Lifecycle/` and loader persistence migration surface | Atomic command receipt/intent/audit operations and bounded coherent projection queries; additive local-only migration with backup. |
+| Existing loader UnitTests/IntegrationTests project trees | Protocol, service/store, recovery, privacy, transport tests; Windows-only security evidence explicitly separated. |
+| `Rag.sln` and loader project references | Add portable Contracts only; no Desktop or CI change. |
+
+Strict TDD acceptance for 11.prev must prove:
+
+- Version/framing round trips; partial/truncated/oversized frames, malformed/deep JSON, unknown operation/version, timeout and saturation rejection without dispatch.
+- Start/pause/resume through dispatcher to real host service with fake extractor/API; no double pipeline after concurrent commands, disconnect, repeated command, or lost response. Conflict fingerprint and missing/invalid run are rejected.
+- Transaction failure and crash around acknowledgement boundaries preserve atomic intent/audit/receipt; restart and explicit resume preserve loaded/terminal rows and the three-attempt ceiling.
+- Pause remains responsive while a pipeline is active; accepted/pausing/paused differ; remote pending never becomes loaded by projection. Blocked conditions cannot be bypassed by resume.
+- Coherent counts/event high-water, bounded pages, replay/deduplication, reconnect/new engine instance, invalid cursor resync, slow reader and unavailable store behavior.
+- Sentinels for content, absolute paths, source keys, credential names/values, tokens and raw exception text are absent from every serialized success, failure, snapshot and event payload.
+- Linux restore/build/test of the default solution and focused loader tests stay green; portable Contracts has no forbidden dependencies. Windows named-pipe round trip and ACL/peer/remote denial evidence is required before declaring the production control boundary verified.
+
+Unit 11.prev may be delivered incrementally as contract/service/transport slices only if each contains its tests and independently reports its limited acceptance; Unit 11 remains blocked until all prerequisite evidence passes. This design does not authorize implementation or a size exception. The task phase must forecast the complete honest surface (including receipt migration and security tests), reconcile the stale Unit 11 dependency, and pause under current-session `ask-on-risk` if the 400-line budget requires a delivery decision. Old exploration/task assertions about exceptions or chain strategy are not renewed consent.
+
+### Rollout and rollback of the prerequisite
+
+Existing inventory/sampling/benchmark invocation stays unchanged; the pipe opens only under explicit `serve`. First validate against prepared fixture batches and fakes, then a bounded approved Windows/loopback run; no WPF, staging deployment, or Gate L completion is implied. Before the local additive migration, use the established SQLite backup process. Rollback stops the new host at a checkpoint and leaves existing CLI use available where schema-compatible; preserve the migrated database, staged files, audit, and receipts. If an older binary cannot read the schema, block downgrade pending a separately approved restore plan; never silently restore a pre-run backup and lose newer receipts.
+
 ## Local data model
 
 SQLite schema migrations are versioned and backed up with the SQLite backup API before migration. Raw database-file copying while the engine is active is prohibited. Startup runs a quick integrity check; a failed check blocks processing and offers restore/export rather than silently rebuilding state.
@@ -436,7 +529,8 @@ Delivery is a sequence of independently testable work units. Tests and user-faci
 | 8 | Historical upload reservation/stream/commit/status API with provenance and workload class. | Streaming limits/hash, idempotency conflict, same-source versioning, cross-source provenance, admission, fairness, and operation telemetry tests. |
 | 9 | Engine API client, Windows Credential Manager integration, Cloudflare header boundary, and global auth-block behavior. | Secret sentinel tests, token restart/expiry, ambiguous mutation reconciliation, edge/API denial classification. |
 | 10 | Bounded pipeline, persisted retries, staged watermarks, pause/resume, and selected extractor implementation. | Three-attempt ceiling across restart; document skip continuity; bounded queues; no fourth attempt; no unconfirmed loaded state. |
-| 11 | Replaceable WPF operator shell. | UI automation/view-model tests cover inventory, start, pausing/paused distinction, resume, states, audit, and errors without terminal use. |
+| 11.prev | Versioned portable local control contract, engine control service, durable command receipts/snapshots, and current-user Windows named-pipe host. Depends on Unit 10; explicitly excludes WPF and protects Linux solution CI. | Protocol/service/store/recovery/privacy tests on Linux plus Windows pipe security evidence; start/pause/resume and bounded state/event snapshots work without a shell. Unit 11 is blocked until this gate passes. |
+| 11 | Replaceable WPF operator shell consuming the verified Unit 11.prev contract. | UI automation/view-model tests cover inventory, start, pausing/paused distinction, resume, states, audit, and errors without terminal use; Windows build/automation evidence remains separate from Linux portable tests. |
 | 12 | Windows local vertical proof and evidence pack. | Gate L, including at least 100 documents, search/provenance, restart, faults, privacy, benchmark, and real-time compatibility. |
 | 13 | OCI/Dokploy ARM64 bounded validation. | Gate A only; no production/full-corpus run. Infrastructure changes, if any, are isolated from AdminApp WIP and separately reviewed. |
 | 14 | Coolify target bounded validation and full-corpus decision packet. | Gate C evidence and rollback; scaling remains unapproved until a separate decision. |

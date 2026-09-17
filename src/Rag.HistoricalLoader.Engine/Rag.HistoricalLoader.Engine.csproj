@@ -6,6 +6,7 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
   <ItemGroup>
+    <ProjectReference Include="../Rag.HistoricalLoader.Contracts/Rag.HistoricalLoader.Contracts.csproj" />
     <ProjectReference Include="../Rag.HistoricalLoader.Core/Rag.HistoricalLoader.Core.csproj" />
   </ItemGroup>
 </Project>

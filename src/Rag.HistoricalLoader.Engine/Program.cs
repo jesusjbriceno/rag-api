@@ -2,6 +2,7 @@ using Rag.HistoricalLoader.Core.Benchmark;
 using Rag.HistoricalLoader.Core.Configuration;
 using Rag.HistoricalLoader.Core.Data;
 using Rag.HistoricalLoader.Engine;
+using Rag.HistoricalLoader.Engine.Control;
 
 return await HistoricalLoaderProgram.RunAsync(args);
 
@@ -20,6 +21,7 @@ internal static class HistoricalLoaderProgram
             "inventory" => await RunInventoryAsync(args),
             "select-sample" => await RunSelectSampleAsync(args),
             "benchmark" when args.Length >= 2 && args[1] == "extraction" => await RunBenchmarkExtractionAsync(args),
+            "serve" => await ControlServeCommand.RunAsync(args),
             _ => Usage(),
         };
     }
@@ -133,10 +135,11 @@ internal static class HistoricalLoaderProgram
 
     private static int Usage()
     {
-        Console.Error.WriteLine("usage: Rag.HistoricalLoader.Engine <inventory|select-sample|benchmark> ...");
+        Console.Error.WriteLine("usage: Rag.HistoricalLoader.Engine <inventory|select-sample|benchmark|serve> ...");
         Console.Error.WriteLine("  inventory --db <path> --out <dir> --root <label=path> [--max-bytes <n>]");
         Console.Error.WriteLine("  select-sample <manifest-id> --db <path> --budget <n> --seed <s> [--min-per-stratum <n>] [--coverage-rules <json>] [--size-bands <n>]");
         Console.Error.WriteLine("  benchmark extraction <sample-set-id> --db <path> [--companion <assembly-path>] [--adapter <name>] [--sustained <hh:mm:ss>] [--sampling-interval <hh:mm:ss>] [--budget <n>] [--min-per-stratum <n>] [--confidence <json>] [--max-error-rate <r>] [--max-timeout-hang-rate <r>]");
+        Console.Error.WriteLine(ControlServeCommand.UsageLine);
         return 2;
     }
 }

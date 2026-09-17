@@ -23,7 +23,7 @@ public sealed record EnumerationErrorRow(
 
 public sealed class SqliteStore : IAsyncDisposable
 {
-    public const int CurrentSchemaVersion = 2;
+    public const int CurrentSchemaVersion = 4;
 
     private const string SchemaV1 = """
         CREATE TABLE loader_installation (
@@ -88,7 +88,69 @@ public sealed class SqliteStore : IAsyncDisposable
         CREATE INDEX idx_enumeration_error_manifest ON enumeration_error(manifest_id);
         """;
 
-    private static readonly IReadOnlyList<Migration> Migrations = [new Migration(1, [SchemaV1]), new Migration(2, [SchemaV2])];
+    private const string SchemaV3 = """
+        CREATE TABLE run (
+            run_id TEXT PRIMARY KEY,
+            sample_id TEXT,
+            collection_id TEXT NOT NULL,
+            desired_state INTEGER NOT NULL,
+            observed_state INTEGER NOT NULL,
+            engine_version TEXT NOT NULL,
+            configuration_snapshot TEXT NOT NULL,
+            started_at INTEGER NOT NULL,
+            ended_at INTEGER,
+            checkpoint_at INTEGER
+        );
+
+        CREATE TABLE run_document (
+            run_document_id TEXT PRIMARY KEY,
+            run_id TEXT NOT NULL REFERENCES run(run_id),
+            candidate_id TEXT NOT NULL,
+            source_document_key TEXT NOT NULL,
+            state INTEGER NOT NULL,
+            reserve_attempts INTEGER NOT NULL DEFAULT 0,
+            upload_attempts INTEGER NOT NULL DEFAULT 0,
+            commit_attempts INTEGER NOT NULL DEFAULT 0,
+            poll_attempts INTEGER NOT NULL DEFAULT 0,
+            extraction_hash TEXT,
+            normalized_text_hash TEXT,
+            remote_upload_id TEXT,
+            remote_document_id TEXT,
+            remote_version_id TEXT,
+            remote_operation_id TEXT,
+            terminal_classification TEXT,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            UNIQUE (run_id, candidate_id)
+        );
+
+        CREATE INDEX idx_run_document_run_state ON run_document(run_id, state);
+        """;
+
+    private const string SchemaV4 = """
+        CREATE TABLE loader_command (
+        command_id TEXT PRIMARY KEY,
+        normalized_fingerprint TEXT NOT NULL,
+        operation TEXT NOT NULL,
+        run_id TEXT,
+        desired_state INTEGER,
+        observed_state INTEGER,
+        created_at INTEGER NOT NULL
+        );
+
+        CREATE TABLE loader_engine_instance (
+        engine_instance_id TEXT PRIMARY KEY,
+        recorded_at INTEGER NOT NULL
+        );
+        """;
+
+    private static readonly IReadOnlyList<Migration> Migrations =
+    [
+        new Migration(1, [SchemaV1]),
+        new Migration(2, [SchemaV2]),
+        new Migration(3, [SchemaV3]),
+        new Migration(4, [SchemaV4]),
+    ];
 
     private readonly SemaphoreSlim _writer = new(1, 1);
     private readonly string _databasePath;
@@ -298,7 +360,48 @@ public sealed class SqliteStore : IAsyncDisposable
         await SeedInstallationAsync(cancellationToken);
     }
 
-    private async Task BackupAsync(long fromVersion, CancellationToken cancellationToken)
+        internal async Task RunExclusiveAsync(Func<SqliteConnection, CancellationToken, Task> action, CancellationToken cancellationToken)
+        {
+            await _writer.WaitAsync(cancellationToken);
+            try
+            {
+                await action(_connection!, cancellationToken);
+            }
+            finally
+            {
+                _writer.Release();
+            }
+        }
+
+        internal async Task<T> RunExclusiveAsync<T>(Func<SqliteConnection, CancellationToken, Task<T>> action, CancellationToken cancellationToken)
+        {
+            await _writer.WaitAsync(cancellationToken);
+            try
+            {
+                return await action(_connection!, cancellationToken);
+            }
+            finally
+            {
+                _writer.Release();
+            }
+        }
+
+        internal async Task RunInTransactionAsync(Func<SqliteConnection, SqliteTransaction, CancellationToken, Task> action, CancellationToken cancellationToken)
+        {
+            await _writer.WaitAsync(cancellationToken);
+            try
+            {
+                await using var transaction = (SqliteTransaction)await _connection!.BeginTransactionAsync(cancellationToken);
+                await action(_connection, transaction, cancellationToken);
+                await transaction.CommitAsync(cancellationToken);
+            }
+            finally
+            {
+                _writer.Release();
+            }
+        }
+
+        private async Task BackupAsync(long fromVersion, CancellationToken cancellationToken)
     {
         var backupPath = $"{_databasePath}.pre-migration-v{fromVersion}.bak";
 
