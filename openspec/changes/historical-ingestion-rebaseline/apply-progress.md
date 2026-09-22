@@ -1,6 +1,77 @@
 # Apply Progress: historical-ingestion-rebaseline
 
-## Work unit (current) — 11.prev-e BF-1 fix and Windows gate re-run (code + evidence; slice still NOT closed)
+## Work unit (current) — 11.prev-e E3/E4 closure under a user-authorized evidence exception (documentation only)
+
+Documentation-only closure of 11.prev-e's two unexecuted evidence letters, recorded so the dependent chain
+(Unit 11 → Unit 12 → Unit 13 → Unit 14) is no longer blocked by them. The prior record's heading was relabelled
+`## Work unit (current)` → `## Work unit (previous)`; its body is byte-intact history.
+
+**This is an exception, not a verification.** Read this paragraph before anything else: **E3 (foreign-user
+denial) and E4 (remote/non-local denial) have never been executed on any host, and no foreign-user or remote
+connect attempt has ever been made against this boundary.** Ticking the two rows below records the maintainer's
+decision to proceed without those two facts; it does not record that they were observed. Any later reader must
+treat them as unverified.
+
+### (1) What was authorized, by whom, and why
+
+- **Authority.** The maintainer (the repository owner, acting as the repository's decision maker in the current
+  session) explicitly authorized a documented evidence exception for 11.prev-e's E3 and E4, with the residual
+  risk written down, in order to unblock the dependent chain. This record attributes the decision to that
+  authorization; it does not invent authority and it does not present the exception as a pass.
+- **Trigger.** Run 2 passes E1, E2, E5, E6 and E7 on a real Windows host, but acceptance letter (b) of 11.prev-e
+  requires foreign-user denial and remote/non-local denial as well. Neither was executable in this environment.
+- **Why they could not be executed** (measured, not assumed): no usable second Windows account exists — `javie`,
+  `Administrador` and `Invitado` are disabled, and the only active accounts are two sandbox accounts whose
+  passwords the operator does not hold — and `runas` additionally needs `seclogon`, which is stopped; and no second
+  Windows host was reachable, because `192.168.1.101` had ports 22, 445 and 3389 all closed while the two
+  reachable LAN nodes were Linux and carry no SMB client able to open an arbitrary named-pipe name.
+- **Precedent followed.** 11.prev-d closed the same way, as "11.prev-d closure under a user-authorized
+  protected-path evidence exception", ticking its row with an inline annotation that states the clause is **not
+  verified**. This record mirrors that convention deliberately rather than inventing one.
+
+### (2) The residual risk this exception carries
+
+- **A descriptor read is not a refused connection.** E2 does read the live pipe's security descriptor and it does
+  show what the object manager will enforce (owner = group = the single allow ACE, DACL protected, no broad
+  principals). But it is a reading, not a denial, and this slice already contains the lesson: run 1's peer check
+  looked correct in the source and denied every legitimate peer the instant it ran. Source and descriptors can
+  both look right while the enforcement path is broken.
+- **`PIPE_REJECT_REMOTE_CLIENTS` is unproven.** The flag is passed explicitly to `CreateNamedPipeW` and is visible
+  in the creation call, but no remote client has ever been refused by it. Nothing in this record shows the kernel
+  acting on it.
+- **What would stay invisible.** A defect that made the DACL ineffective, or that the interop layered on top of
+  it, would not be caught by anything recorded here until a foreign or remote client is actually attempted.
+- **What retires the exception.** One elevated session for E3 (create or enable a local test account with a known
+  password, start `seclogon`, then `runas`) and one more Windows host on the same network for E4. Both remain the
+  honest way to close it; the operator runbook in
+  `docs/historical-ingestion-rebaseline/unit-11-prev-e-windows-operator-runbook.md` already carries the corrected
+  procedure for both.
+
+### (3) Exact edits made
+
+- `openspec/changes/historical-ingestion-rebaseline/tasks.md` — the 11.prev-e acceptance-evidence row and the
+  Unit 11.prev full prerequisite gate row are now `[x]`, each with an inline `<!-- evidence exception ... -->`
+  annotation that names the exact letters closed by exception, states **NOT verified**, and points here. Following
+  the 11.prev-d precedent, which ticks its row for exactly this reason.
+- `docs/historical-ingestion-rebaseline/unit-11-prev-windows-pipe-security.md` — new limit **L8** carrying the
+  exception and the residual risk, plus updated sign-off rows and a run-2 note that the fix and this record are
+  committed and pushed.
+- This file — this record.
+
+### (4) Scope and side effects
+
+- **No code, test, csproj, `Rag.sln`, `design.md`, `verify-report.md`, or protected path changed.** No ODD task or
+  mirror was created. Nothing was re-run, and no evidence in the file was rewritten: run 1 and run 2 stand exactly
+  as recorded.
+- **This does not claim the gate was satisfied.** It records that the maintainer accepted proceeding without it.
+- The BF-1 fix, the gate record, the operator runbook and the redaction of machine-identifying values were already
+  committed and pushed before this record (`bc5b523`, `105b8b7`, `41ae3aa`, `1304bf0`); this record adds one more
+  commit on the same branch. No pull request was opened because none was requested.
+- Board regeneration could not run: `~/scripts/openspec-espejo.py` does not exist on this host.
+
+`skill_resolution`: `paths-injected`.
+
+## Work unit (previous) — 11.prev-e BF-1 fix and Windows gate re-run (code + evidence; slice still NOT closed)
 
 Code work unit that fixes the blocking defect run 1 found, plus the operator re-run of the Windows gate on the fixed
 build. The prior record's heading was relabelled `## Work unit (current)` → `## Work unit (previous)`; its body is
