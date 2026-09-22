@@ -1,6 +1,67 @@
 # Apply Progress: historical-ingestion-rebaseline
 
-## Work unit (current) — 11.prev-e E3/E4 closure under a user-authorized evidence exception (documentation only)
+## Work unit (current) — 11.prev-e Linux CI verification and lifecycle-row closure (documentation only)
+
+Documentation-only record of the first Linux verification of the BF-1 fix, and of the four 11.prev-e lifecycle rows it
+unblocks. The prior record's heading was relabelled `## Work unit (current)` → `## Work unit (previous)`; its body is
+byte-intact history.
+
+### (1) What was observed
+
+- **PR #33** was opened as the chain link: head `feat/historical-ingestion-windows-probe`, base the marker branch
+  `chore/historical-loader-pre-bf1` at `1b89a6e`, so the PR carries the BF-1 unit (**7 files, +1095/-48**) instead of
+  the 32 512 lines a PR against `develop` would show. It links `Closes #29` and carries exactly one `type:*` label
+  (`type:bug`).
+- **The `ci-pr` run 35744364129 ran two jobs:**
+  - **`Validate pull request` (ubuntu-latest): completed success.** It runs `dotnet restore`, `dotnet build
+    Rag.sln` and `dotnet test Rag.sln` plus compose validation, CI publication guards and actionlint. This is the
+    first time the solution — and therefore the BF-1 fix — was built and tested on Linux.
+  - `Validate companion (win-x64)` (windows-latest): completed failure, 96 passed / 5 failed of 101 in
+    `Rag.Companion.Tests`. Four `LibreOfficeRunnerTests` cases fail because the test builds a Unix-style `soffice`
+    shim that Windows refuses to execute ("not a valid application for this OS platform"), and
+    `ImportFixtureManifestTests.Manifest_sha256_matches_every_fixture` fails with `Assert.Equal() Failure`.
+- **That failure is not caused by this branch, and it is not a regression.** GitHub's own compare
+  (`repos/jesusjbriceno/rag-api/compare/develop...feat/historical-ingestion-windows-probe`) lists 135 changed files
+  with **zero** in `src/Rag.Companion`, `tests/Rag.Companion.Tests`, `tests/fixtures` or `.github/`; the companion
+  and its fixtures are byte-identical to `develop`. The `companion-windows` job was added on 2026-09-02 (`51cbb28`)
+  and GitHub runs the workflow from the PR's head branch, so every PR since — including #32 on 2026-09-03, whose
+  only job was `Validate pull request` — came from a branch predating it. **This PR is that job's first execution**, so
+  its five failures are an untested CI job's first outing, not something this unit broke.
+- Two of my own hypotheses were killed rather than carried: a `.gitattributes` line-ending theory (its only rule is a
+  whitespace rule on a PDF and the branch does not change that file), and the reliability of `git show <ref>:<path>`
+  in the evidence clone, which wrongly reported that `develop` lacks `.github/workflows/ci-pr.yml`. `git diff`
+  agrees with GitHub; `git show` on those refs does not.
+
+### (2) Rows ticked, and the evidence for each
+
+The four 11.prev-e lifecycle rows are now `[x]`, each with an inline annotation naming its basis:
+
+| Row | Basis |
+| --- | --- |
+| RED | The RED contract is `NamedPipeTransportTests.cs`, and the ci-pr Linux job ran the full solution test suite green. |
+| GREEN | The factory, owner-restricted protected ACL, explicit remote-client rejection, peer-SID check and derived endpoint are implemented, and **run 2 of the Windows gate proved them on a real host** (E1, E2, E5, E6, E7). |
+| TRIANGULATE | The saturation, idle-peer and unavailable-identity fail-closed sequences are covered and green in Linux CI. **Its foreign-user clause rests on the recorded E3 exception, not on an executed attempt.** |
+| REFACTOR | All five transport types are collapsed under `Control/WindowsPipeTransport.cs`, and the ci-pr Linux job ran the full solution tests green — the Linux confirmation this row asks for. **Deliberate deviation recorded:** the new portable `PeerPrefixStream` lives in its own file because it is platform-neutral and must stay reachable from the test project. |
+
+Only the parent-owned delivery-decision record remains unchecked in that slice.
+
+### (3) A contradiction I introduced and corrected
+
+The 11.prev-e acceptance row still carried the sentence "This box stays `[ ]` — do not tick it" from the pre-exception
+record, while the exception had already ticked it. A record that contradicts its own state is worse than an incomplete
+one, so that sentence was replaced by wording that says the box is ticked **only** because of the authorized
+exception, that the two letters are NOT verified, and that a later reader must not read the tick as evidence of them.
+
+### (4) Scope and side effects
+
+- Only `openspec/changes/historical-ingestion-rebaseline/tasks.md` and this file changed. No code, test, csproj,
+  `Rag.sln`, `design.md`, `verify-report.md` or protected path was touched, and no evidence was re-run or rewritten.
+- Nothing in this record claims that E3 or E4 were executed; the exception in the previous record stands unchanged.
+- Board regeneration could not run: `~/scripts/openspec-espejo.py` does not exist on this host.
+
+`skill_resolution`: `paths-injected`.
+
+## Work unit (previous) — 11.prev-e E3/E4 closure under a user-authorized evidence exception (documentation only)
 
 Documentation-only closure of 11.prev-e's two unexecuted evidence letters, recorded so the dependent chain
 (Unit 11 → Unit 12 → Unit 13 → Unit 14) is no longer blocked by them. The prior record's heading was relabelled
