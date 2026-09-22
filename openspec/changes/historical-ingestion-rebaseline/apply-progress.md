@@ -7,7 +7,7 @@ build. The prior record's heading was relabelled `## Work unit (current)` → `#
 byte-intact history.
 
 **Provenance, stated plainly:** the fix and its tests were authored in this session. The Windows re-run is
-operator-observed evidence from `DESKTOP-P7H1D96`, **not** an independent verification: no `gentle-ai-verify` run,
+operator-observed evidence from `<hostname>`, **not** an independent verification: no `gentle-ai-verify` run,
 no 4R lens, no approval and no review outcome are claimed here. No checkbox was marked.
 
 ### (1) The defect and the fix
@@ -128,7 +128,7 @@ pipe, differing **only** in read ordering:
 | Order | Server result | Client result |
 | --- | --- | --- |
 | impersonate immediately (**the engine's order**) | `RunAsClient FAILED: System.IO.IOException \| HResult=0x80070558` | `System.IO.IOException: Pipe is broken` |
-| read one byte first, then impersonate | `impersonated peer = DESKTOP-P7H1D96\jesus` / `RunAsClient SUCCEEDED` | `wrote one byte` |
+| read one byte first, then impersonate | `impersonated peer = <hostname>\<operator>` / `RunAsClient SUCCEEDED` | `wrote one byte` |
 
 Consequences established by that run: (i) `SeImpersonatePrivilege` is **not** the blocker (the operator is a standard
 user without it and still impersonated a same-user peer successfully); (ii) the ACL is **not** the blocker (the E2 probe

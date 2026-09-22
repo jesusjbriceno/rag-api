@@ -2,7 +2,7 @@
 
 **Slice:** 11.prev-e (Windows named-pipe transport + pipe security evidence).
 **Status: EXECUTED on a real Windows host — run 1 FAILED, BF-1 FIXED, run 2 passes 5 of 7; SLICE STILL NOT\
-CLOSED.** Both runs were made on 2026-09-22 on `DESKTOP-P7H1D96` (Windows 11 Home, build 26200), run 1 at
+CLOSED.** Both runs were made on 2026-09-22 on `<hostname>` (Windows 11 Home, build 26200), run 1 at
 commit `1b89a6ea` and run 2 at that same commit **plus the BF-1 fix** (`Control/PeerPrefixStream.cs`,
 `WindowsPipeTransport.cs`, and six new cases in `NamedPipeTransportTests.cs`).
 
@@ -92,9 +92,9 @@ so `PIPE_REJECT_REMOTE_CLIENTS` remains a code fact plus an operator observation
 
 | Field | Value |
 | --- | --- |
-| Machine / VM | `DESKTOP-P7H1D96` — physical workstation, 64-bit. Windows 8 / Server 2012 or later requirement: **satisfied**. |
+| Machine / VM | `<hostname>` — physical workstation, 64-bit. Windows 8 / Server 2012 or later requirement: **satisfied**. |
 | Windows edition + build (`winver`) | Microsoft Windows 11 Home, version `10.0.26200`, build `26200` (`Win32_OperatingSystem`) |
-| Operator account (same-user test) | `DESKTOP-P7H1D96\jesus`, SID `S-1-5-21-404486456-3878587204-1188215715-1001`. Token privileges: `SeShutdownPrivilege`, `SeChangeNotifyPrivilege`, `SeUndockPrivilege`, `SeIncreaseWorkingSetPrivilege`, `SeTimeZonePrivilege`. **Standard user, not an administrator; `SeImpersonatePrivilege` is not held.** |
+| Operator account (same-user test) | `<hostname>\<operator>`, SID `<operator-sid>`. Token privileges: `SeShutdownPrivilege`, `SeChangeNotifyPrivilege`, `SeUndockPrivilege`, `SeIncreaseWorkingSetPrivilege`, `SeTimeZonePrivilege`. **Standard user, not an administrator; `SeImpersonatePrivilege` is not held.** |
 | Foreign account used for denial testing | **NONE — E3 NOT EXECUTED.** The host has no second account whose credentials the operator holds, and the operator is a standard user, so no account could be created for the test. |
 | Engine commit / build hash (`Rag.HistoricalLoader.Engine.dll`) | commit `1b89a6ea538dd590935605327b022914f04e8a5d` (branch `feat/historical-ingestion-windows-probe`, `git status --porcelain` empty in run 1). **Run 1** (`Rag.HistoricalLoader.Engine.dll` SHA-256 `77af3bf826590bef6c1de96744175976095841c93e104771aa5d9011155864f5`, 227 328 bytes). **Run 2**: the same commit plus the BF-1 fix, uncommitted at run time (`Rag.HistoricalLoader.Engine.dll` SHA-256 `cdf0fee4036317c25e214c35be366a2b11a8c3c802b886c1d106121744e0a89c`); the fix touches `Control/WindowsPipeTransport.cs`, adds `Control/PeerPrefixStream.cs`, and adds six cases to `tests/Rag.HistoricalLoader.UnitTests/Control/NamedPipeTransportTests.cs`. |
 | Database + lock path used | `C:\rag-evidence\e1\serve.sqlite` + `C:\rag-evidence\e1\historical-loader.lock`; E6 second instance used `C:\rag-evidence\e6\serve.sqlite` + `C:\rag-evidence\e6\historical-loader.lock` |
@@ -109,25 +109,31 @@ so `PIPE_REJECT_REMOTE_CLIENTS` remains a code fact plus an operator observation
 | --- | --- |
 | Toolchain | .NET SDK `10.0.401`; `global.json` pins `10.0.111` with `rollForward: latestFeature`; `dotnet build Rag.sln --configuration Release` → **0 errors**, 43 warnings |
 | Isolation | separate clone `C:\src\rag-api-windows-evidence` (no pre-existing personal changes; the operator's own working clone was not checked out) |
-| Derived endpoint | `rag-historical-loader-v1-4edcadf3017c70a0914c7e6f96b7f488`, independently derived by the operator script from `MachineGuid 23a0dbcf-444d-4e99-b04d-68229a2602b9` + the operator SID, and matching the single pipe the engine created |
+| Derived endpoint | `rag-historical-loader-v1-4edcadf3017c70a0914c7e6f96b7f488`, independently derived by the operator script from `MachineGuid <machine-guid>` + the operator SID, and matching the single pipe the engine created |
 | Raw evidence directory | `C:\rag-evidence\` (`e0-meta.out.txt`, `e1\`, `e2\`, `e5\`, `e6\`, `e7\`, `e7g\`, `probe2-order.out.txt`, `probe-ctrlc.out.txt`, `client.ps1`) |
+
+**Redaction.** This repository is public, so the machine-identifying values in the raw output below are
+redacted as `<hostname>`, `<operator>`, `<operator-sid>` and `<machine-guid>`. Nothing about the security claims
+depends on those identifiers: E2's evidence is the ACL *shape* (owner = group = the single allow ACE, protected,
+no broad principals), which the redacted SDDL still shows in full. The unredacted transcripts are held by the
+operator in the raw evidence directory above, outside this repository.
 
 ## 5. Evidence rows (observed, raw output)
 
 | # | Claim | Exact procedure | Expected observation | Observed (paste) | Verdict |
 | --- | --- | --- | --- | --- | --- |
-| E1 | **Same-user connection succeeds** | Start `serve` as the operator; from a second process of the **same user**, connect to the derived pipe name and send the version-1 `hello` frame. | Connection established; `status: "ok"`; `hello` advertises the supported version, capabilities, and limits. | `client_user=DESKTOP-P7H1D96\jesus`<br>`client_sid=S-1-5-21-404486456-3878587204-1188215715-1001`<br>`operation=hello`<br>`CLIENT_ERROR: System.Management.Automation.MethodInvocationException : Excepción al llamar a "Write" con los argumentos "3": "Canalización interrumpida."`<br><br>The engine connected and then closed the connection **before a frame was served**; the client's first `Write` fails with `ERROR_BROKEN_PIPE` (109). The running instance stays alive and keeps listening. Root cause in §5.1. | **☑ pass (run 2)** — ☑ fail in run 1 |
+| E1 | **Same-user connection succeeds** | Start `serve` as the operator; from a second process of the **same user**, connect to the derived pipe name and send the version-1 `hello` frame. | Connection established; `status: "ok"`; `hello` advertises the supported version, capabilities, and limits. | `client_user=<hostname>\<operator>`<br>`client_sid=<operator-sid>`<br>`operation=hello`<br>`CLIENT_ERROR: System.Management.Automation.MethodInvocationException : Excepción al llamar a "Write" con los argumentos "3": "Canalización interrumpida."`<br><br>The engine connected and then closed the connection **before a frame was served**; the client's first `Write` fails with `ERROR_BROKEN_PIPE` (109). The running instance stays alive and keeps listening. Root cause in §5.1. | **☑ pass (run 2)** — ☑ fail in run 1 |
 
 **Run 2 (after the BF-1 fix) — same procedure, same host, fixed build** (`Rag.HistoricalLoader.Engine.dll` SHA-256 `cdf0fee4036317c25e214c35be366a2b11a8c3c802b886c1d106121744e0a89c`):
-<br>`client_user=DESKTOP-P7H1D96\jesus`
-<br>`client_sid=S-1-5-21-404486456-3878587204-1188215715-1001`
+<br>`client_user=<hostname>\<operator>`
+<br>`client_sid=<operator-sid>`
 <br>`--- hello ---`
 <br>`{"protocol_version":1,"request_id":"bab8326f-ccf7-4b3d-ad4e-36746d798805","status":"ok","payload":{"supported_versions":[1],"capabilities":["pause","resume","document_pages","event_feed"],"installation_id":"7a37977e-ce54-45f4-937b-0b97bdb6b3aa","engine_instance_id":"engine-instance-40e6fc2d3dd14fc6adfe4094cadb5cf9","limits":{"max_frame_bytes":1048576,"max_json_depth":16,"max_page_size":100}}}`
 <br><br>Connection established and the version-1 handshake answered over the real pipe: `status: "ok"`, the supported protocol version, the four advertised capabilities, and the recorded limits. The defect that made this impossible in run 1 is described in §5.1 and its fix in §5.4. |
-| E2 | **ACL enforcement verified** | With `serve` running, `Get-Acl \\.\pipe\<endpoint>` (or Sysinternals `accesschk`) on the pipe object. | Owner = operator SID; **one** allow ACE (operator, full control); no `Everyone`/`Users`/`Authenticated Users`/`Anonymous`/`Network` entry; inheritance disabled. | `Get-Acl` **cannot read a named-pipe object** (`InvalidOperationException`, Win32 error 87) and Sysinternals `accesschk64.exe` is not installed, so the descriptor was read directly: `CreateFileW("\\.\pipe\<endpoint>", READ_CONTROL)` → handle, then `GetSecurityInfo(handle, SE_KERNEL_OBJECT, OWNER|GROUP|DACL)` and `ConvertSecurityDescriptorToStringSecurityDescriptorW`. Raw result:<br>`SDDL=O:S-1-5-21-404486456-3878587204-1188215715-1001G:S-1-5-21-404486456-3878587204-1188215715-1001D:P(A;;0x1f019f;;;S-1-5-21-404486456-3878587204-1188215715-1001)`<br>`Owner=S-1-5-21-404486456-3878587204-1188215715-1001`<br>`Group=S-1-5-21-404486456-3878587204-1188215715-1001`<br>`ControlFlags=DiscretionaryAclPresent, DiscretionaryAclProtected, SelfRelative`<br>`DiscretionaryAclProtected=True`<br>`DiscretionaryAclAutoInherited=False`<br>`ACE[0] AceType=AccessAllowed AceFlags=None AccessMask=0x001F019F SID=S-1-5-21-404486456-3878587204-1188215715-1001`<br>`AceCount=1`<br><br>Owner and group are the operator SID; the DACL is protected (`D:P`) with **exactly one** allow ACE for the operator (`0x1F019F` = `PipeAccessRights.FullControl`); no `Everyone`/`Users`/`Authenticated Users`/`Anonymous`/`Network` ACE exists and no ACE is inherited. The same handle proves the **kernel ACL admits the operator**: the denial in E1 happens above the ACL, inside the engine. | **☑ pass** |
+| E2 | **ACL enforcement verified** | With `serve` running, `Get-Acl \\.\pipe\<endpoint>` (or Sysinternals `accesschk`) on the pipe object. | Owner = operator SID; **one** allow ACE (operator, full control); no `Everyone`/`Users`/`Authenticated Users`/`Anonymous`/`Network` entry; inheritance disabled. | `Get-Acl` **cannot read a named-pipe object** (`InvalidOperationException`, Win32 error 87) and Sysinternals `accesschk64.exe` is not installed, so the descriptor was read directly: `CreateFileW("\\.\pipe\<endpoint>", READ_CONTROL)` → handle, then `GetSecurityInfo(handle, SE_KERNEL_OBJECT, OWNER|GROUP|DACL)` and `ConvertSecurityDescriptorToStringSecurityDescriptorW`. Raw result:<br>`SDDL=O:<operator-sid>G:<operator-sid>D:P(A;;0x1f019f;;;<operator-sid>)`<br>`Owner=<operator-sid>`<br>`Group=<operator-sid>`<br>`ControlFlags=DiscretionaryAclPresent, DiscretionaryAclProtected, SelfRelative`<br>`DiscretionaryAclProtected=True`<br>`DiscretionaryAclAutoInherited=False`<br>`ACE[0] AceType=AccessAllowed AceFlags=None AccessMask=0x001F019F SID=<operator-sid>`<br>`AceCount=1`<br><br>Owner and group are the operator SID; the DACL is protected (`D:P`) with **exactly one** allow ACE for the operator (`0x1F019F` = `PipeAccessRights.FullControl`); no `Everyone`/`Users`/`Authenticated Users`/`Anonymous`/`Network` ACE exists and no ACE is inherited. The same handle proves the **kernel ACL admits the operator**: the denial in E1 happens above the ACL, inside the engine. | **☑ pass** |
 
 **Run 2 re-verified the identical descriptor on the fixed build** (`e2-acl.out.txt` of run 2):
-`Group=S-1-5-21-404486456-3878587204-1188215715-1001`, `ControlFlags=DiscretionaryAclPresent, DiscretionaryAclProtected, SelfRelative`, `DiscretionaryAclProtected=True`, `DiscretionaryAclAutoInherited=False`, `ACE[0] AceType=AccessAllowed AceFlags=None AccessMask=0x001F019F SID=S-1-5-21-404486456-3878587204-1188215715-1001`, `AceCount=1` — byte-for-byte the same single-ACE owner-only DACL, so the fix changed no security descriptor. |
+`Group=<operator-sid>`, `ControlFlags=DiscretionaryAclPresent, DiscretionaryAclProtected, SelfRelative`, `DiscretionaryAclProtected=True`, `DiscretionaryAclAutoInherited=False`, `ACE[0] AceType=AccessAllowed AceFlags=None AccessMask=0x001F019F SID=<operator-sid>`, `AceCount=1` — byte-for-byte the same single-ACE owner-only DACL, so the fix changed no security descriptor. |
 | E3 | **Foreign-user connection denied** | From a second logon session as a **different** user, attempt to connect to the same pipe name. | Access denied (`ERROR_ACCESS_DENIED`); **no** frame is served and the running instance keeps listening. | **NOT EXECUTED — no foreign account was available.** The host has no second account whose credentials the operator holds, and the operator is a standard user, so none could be created. The procedure's `runas /user:<other> powershell` step could not be performed. What *is* recorded instead: the E2 descriptor grants access to the operator SID only, so a foreign user has no allow ACE at all — but that is an ACL reading, **not** a foreign-user connect attempt, and it is not claimed as E3 evidence. | **☐ not executed** |
 | E4 | **Remote / non-local connection denied** | From another machine on the network (or `\\<host>\pipe\<endpoint>` / a remote client attempt), try to connect. | Connect fails; nothing is dispatched; the server never reaches the peer-verification step (the kernel already refused it). | **NOT EXECUTED — no second machine on the network was available.** No remote named-pipe connect attempt was made, so `PIPE_REJECT_REMOTE_CLIENTS` remains **unproven on this host**. | **☐ not executed** |
 | E5 | **Fail-closed with no TCP/public/anonymous fallback** | During E1–E4, enumerate listeners: `Get-NetTCPConnection -State Listen` (per process) and `[System.IO.Directory]::GetFiles('\\.\pipe\')`. | **No** new TCP listener for the engine process; **one** pipe instance name, the derived endpoint; no second/alternate name; no anonymous or network-wide pipe. | Baseline before `serve` (`label=baseline-before-serve`): `rag_pipes=0`, `total_tcp_listeners=55`, listeners owned by the engine PID = 0.<br>During `serve` (engine PID 2072, `label=e5-during-serve`):<br>`total_pipes=512`<br>`rag_pipes=1`<br>`  \\.\pipe\rag-historical-loader-v1-4edcadf3017c70a0914c7e6f96b7f488`<br>`total_tcp_listeners=54`<br>`listeners_owned_by_engine_pid_2072=0`<br>`(no dotnet/Rag process owns any TCP listener)`<br><br>Exactly one pipe appeared, and it is the derived endpoint — no second or alternate name. The engine process owns **zero** TCP listeners, and no listener appeared during the run (the total fell from 55 to 54; the single dotnet-owned loopback listener seen at baseline was an unrelated build server). No anonymous or network-wide pipe exists. | **☑ pass** |
@@ -186,21 +192,21 @@ byte-mode pipe created the same way, differing **only** in whether one byte is r
 
 ```
 === order=before (impersonate immediately — the engine's order) ===
-server: listening as DESKTOP-P7H1D96\jesus
+server: listening as <hostname>\<operator>
 server: peer connected (order=before)
 server: RunAsClient FAILED: System.IO.IOException | HResult=0x80070558 | Message=No se puede suplantar
         usando una canalización dada hasta que se hayan leído los datos de esa canalización.
-client: connected as DESKTOP-P7H1D96\jesus
+client: connected as <hostname>\<operator>
 Unhandled exception. System.IO.IOException: Pipe is broken.
    at System.IO.Pipes.PipeStream.WriteCore(ReadOnlySpan`1 buffer)
 
 === order=after (read one byte first, then impersonate) ===
-server: listening as DESKTOP-P7H1D96\jesus
+server: listening as <hostname>\<operator>
 server: peer connected (order=after)
 server: read one byte from the peer = 0x41
-server: impersonated peer = DESKTOP-P7H1D96\jesus
+server: impersonated peer = <hostname>\<operator>
 server: RunAsClient SUCCEEDED
-client: connected as DESKTOP-P7H1D96\jesus
+client: connected as <hostname>\<operator>
 client: wrote one byte
 ```
 
@@ -350,6 +356,6 @@ E7 on the real host are what prove it.
 | Rows passed / failed | **Run 1:** E2 pass · E5 pass · E6 pass · E1 FAIL · E7 FAIL · E3/E4 not executed → 3 pass, 2 fail, 2 not executed. **Run 2 (after the BF-1 fix):** E1 pass · E2 pass · E5 pass · E6 pass · E7 pass · E3/E4 not executed → **5 pass, 0 fail, 2 not executed** |
 | Blocking findings | **None open.** BF-1 was blocking and is **fixed and re-verified** (§5.4): the peer check denied every peer because it impersonated before reading; it now reads one byte, verifies, and replays that byte through `PeerPrefixStream`. **E3 (foreign-user denial) and E4 (remote denial) are still not executed**, and acceptance letter (b) requires them, so the slice is not closed — but that is an environment gap, not a defect. |
 | Non-blocking findings | **NF-1:** `Get-Acl` cannot read a named-pipe object and no Sysinternals tooling is present, so reading the pipe DACL requires `CreateFileW(READ_CONTROL)` + `GetSecurityInfo(SE_KERNEL_OBJECT)`; the run guide's `Get-Acl` instruction does not work as written and its fallback is uninstalled. **NF-2:** the E6 collision emits a human sentence rather than the literal `command_conflict` token, and surfaces at the pipe-ownership branch because the second instance used a different lock path. **NF-3:** the run guide's `RAG_HISTORICAL_LOADER_COMPANION_ASSEMBLY` path omits the `win-x64` RID segment. **NF-4:** a synthetic `CTRL_C_EVENT` cannot be delivered from this harness (§5.2). **F-1:** the version-1 protocol requires `hello` to succeed on the **same connection** before any other operation (`Control/Session.cs`), which the run guide's one-connection-per-call client cannot satisfy — so E7 as written can never pass; a same-connection client does (§5.4.1). **F-2:** 3 of the Linux suite's 425 cases fail on Windows for unrelated platform reasons (two Linux-only assertions, one symlink privilege), proven pre-existing by a stashed-tree re-run. |
-| Operator | `DESKTOP-P7H1D96\jesus` (standard user, SID `S-1-5-21-404486456-3878587204-1188215715-1001`), on `DESKTOP-P7H1D96`, Windows 11 Home build 26200 |
+| Operator | `<hostname>\<operator>` (standard user, SID `<operator-sid>`), on `<hostname>`, Windows 11 Home build 26200 |
 | Date | 2026-09-22 (run 1: 07:43Z–07:55Z UTC; run 2: 11:22Z–11:45Z UTC) |
 | Notes | Run 1: commit `1b89a6ea538dd590935605327b022914f04e8a5d`, Engine DLL SHA-256 `77af3bf826590bef6c1de96744175976095841c93e104771aa5d9011155864f5`. Run 2: the same commit **plus the BF-1 fix** (uncommitted at the time of the run), Engine DLL SHA-256 `cdf0fee4036317c25e214c35be366a2b11a8c3c802b886c1d106121744e0a89c`. Branch `feat/historical-ingestion-windows-probe`; separate clone at `C:\src\rag-api-windows-evidence`; the operator's working clone was not modified. Every server was stopped with a console control event (no forced kill), all engine and probe processes are confirmed gone, no `rag-historical-loader-v1*` pipe remains and the test locks are released. **11.prev-e is still NOT closed and Unit 11 stays blocked:** E3 and E4 were never executed, so acceptance letter (b) is unmet even though the transport now demonstrably serves the operator. Do not tick the acceptance-evidence item, and do not start Unit 11, until a foreign account and a second machine exist to run E3 and E4. |
