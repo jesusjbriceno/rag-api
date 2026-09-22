@@ -1,6 +1,193 @@
 # Apply Progress: historical-ingestion-rebaseline
 
-## Work unit (current) — 11.prev-e final Linux whole-solution verification (documentation only, inline fallback)
+## Work unit (current) — 11.prev-e BF-1 fix and Windows gate re-run (code + evidence; slice still NOT closed)
+
+Code work unit that fixes the blocking defect run 1 found, plus the operator re-run of the Windows gate on the fixed
+build. The prior record's heading was relabelled `## Work unit (current)` → `## Work unit (previous)`; its body is
+byte-intact history.
+
+**Provenance, stated plainly:** the fix and its tests were authored in this session. The Windows re-run is
+operator-observed evidence from `DESKTOP-P7H1D96`, **not** an independent verification: no `gentle-ai-verify` run,
+no 4R lens, no approval and no review outcome are claimed here. No checkbox was marked.
+
+### (1) The defect and the fix
+
+Run 1 (§5/§5.1 of the evidence file) proved that `WindowsNamedPipeTransport.TryVerifyPeer` impersonated the peer
+**before any byte had been read**. On a byte-mode named pipe the OS refuses that with `ERROR_CANNOT_IMPERSONATE`
+(1368, `HResult=0x80070558`); the `catch (Exception) { return false; }` swallowed it as "different user", so the
+boundary denied **every** peer — including the operator — and the whole local control surface was unreachable on
+Windows.
+
+| File | Change |
+| --- | --- |
+| `src/Rag.HistoricalLoader.Engine/Control/PeerPrefixStream.cs` | **New** portable duplex stream: yields bytes already read from a peer before the peer's own stream, in order and once each. Refuses seeking; does not own the inner stream (the transport owns instance lifetimes). |
+| `src/Rag.HistoricalLoader.Engine/Control/WindowsPipeTransport.cs` | The accept loop now prepares the next instance, reads **exactly one byte** under the recorded `ReadDeadline`, verifies the peer, then dispatches with a `PeerPrefixStream` so the consumed byte is replayed unparsed. Two comments that asserted "before any byte is read" were corrected to the guarantee the code actually provides (no byte parsed, no request dispatched before the SID check). |
+| `tests/Rag.HistoricalLoader.UnitTests/Control/NamedPipeTransportTests.cs` | **Six new cases** for the portable half of the fix. |
+
+### (2) TDD lifecycle
+
+- **RED:** the six cases were written before the type existed; the test project failed to compile with one `CS0246`
+  per case (`PeerPrefixStream` not found) — six failures, none of them an assertion error, which is the honest
+  starting state for a type that does not exist yet.
+- **GREEN:** `dotnet test --filter FullyQualifiedName~PeerPrefixStream` → **6 passed, 0 failed**.
+- **Regression check:** the full unit-test project reports **425 total / 422 passed / 3 failed**. The three are
+  `ProductionServe_OnThisPlatform_FailsClosedBeforeTheLockTheStoreAndAnyIngestion` and
+  `TheProductionNamedPipeHost_OpensNothingUntilStart_AndNeverAnAnonymousOrTcpEndpoint` (both asserting
+  `Assert.False(ControlPipeTransportFactory.IsPlatformSupported)`, a Linux-only assertion) and
+  `PhysicalFileSystemReader_DetectsSymlinkAsReparsePointAndDoesNotFollow` (`Directory.CreateSymbolicLink` failing
+  with "a required privilege is not held by the client" for a standard Windows user). **Proven pre-existing, not
+  claimed:** the fix was stashed, the same three were re-run on the pristine tree and failed identically, then the
+  fix was restored with `git stash pop`. The suite targets Linux; a Windows run is a verification aid.
+- **REFACTOR:** not needed — the change is one new type plus a reordered accept path; no existing behaviour was
+  restructured.
+
+### (3) Windows gate re-run (run 2) on the fixed build
+
+Engine DLL SHA-256 `cdf0fee4036317c25e214c35be366a2b11a8c3c802b886c1d106121744e0a89c` (run 1 was
+`77af3bf826590bef6c1de96744175976095841c93e104771aa5d9011155864f5`).
+
+| # | Run 1 | Run 2 |
+| --- | --- | --- |
+| E1 same-user `hello` | FAIL | **pass** — `status: "ok"` with version, four capabilities and the recorded limits |
+| E2 ACL | pass | **pass** — identical single-ACE owner-only descriptor, `0x001F019F`, `D:P`, `AceCount=1` |
+| E3 foreign user denied | not executed | **not executed** |
+| E4 remote denied | not executed | **not executed** |
+| E5 no TCP/public/anonymous fallback | pass | **pass** — `rag_pipes=1`, `listeners_owned_by_engine_pid=0` |
+| E6 collision fails closed | pass | **pass** — exit `4`, first instance untouched |
+| E7 round trip + clean stop | FAIL | **pass** — `hello` then `get_state` on one connection returned the durable empty projection; shutdown `exit_code=0` |
+
+### (4) Two findings from run 2
+
+- **F-1 (client/guide gap, not a product defect).** `Control/Session.cs` requires `hello` to succeed **on the same
+  connection** before any other operation and otherwise rejects with `malformed_request`. The run guide's
+  `Invoke-LoaderRequest` opens a new connection per call, so `get_state` is always refused and **E7 as written in
+  the guide can never pass** regardless of transport health. Run 2 used a same-connection client. The gate is
+  itself a security property: a fresh connection cannot inherit a previous peer's handshake.
+- **F-2 (environment).** 3 of 425 Linux-suite cases cannot pass on Windows (see (2)).
+
+### (5) Scope and side effects
+
+- **No checkbox was marked.** Every `#### 11.prev-e` row stays `[ ]`, as do the full prerequisite gate and the
+  delivery-decision record: acceptance letter (b) requires **foreign-user denial** and **remote/non-local denial**,
+  and E3/E4 were never executed. `tasks.md` received annotation comments only.
+- Files changed by this work unit: `src/Rag.HistoricalLoader.Engine/Control/PeerPrefixStream.cs` (new),
+  `src/Rag.HistoricalLoader.Engine/Control/WindowsPipeTransport.cs`,
+  `tests/Rag.HistoricalLoader.UnitTests/Control/NamedPipeTransportTests.cs`,
+  `docs/historical-ingestion-rebaseline/unit-11-prev-windows-pipe-security.md` (runs 1 and 2, §5.4 added, `L5`
+  closed, `L7` added), this file, and `tasks.md`.
+- Not touched: `Rag.sln`, every csproj, `Program.cs`, `NamedPipeHost.cs`, Core, Contracts, WPF/Desktop, CI,
+  Docker/Compose, and every protected path. No `InternalsVisibleTo` was added and no public contract type changed:
+  the guard tests that enumerate the Contracts assembly still pass, and `PeerPrefixStream` is a `Stream` wrapper
+  in the same namespace as the public `IControlTransport` seam that already traffics in `Stream`.
+- Nothing was staged, committed, pushed, reset, or published; no review lifecycle operation was started, answered
+  or acknowledged. Board regeneration could not run: `~/scripts/openspec-espejo.py` does not exist on this host.
+- Every engine and probe process was stopped with a console control event (no forced kill); no
+  `rag-historical-loader-v1*` pipe remains and the test locks are released.
+
+`skill_resolution`: `paths-injected`.
+
+## Work unit (previous) — 11.prev-e Windows pipe-security evidence E1–E7 (operator-run evidence record; gate FAILED)
+
+Evidence record of the **operator-run Windows named-pipe security gate** for slice **11.prev-e**, added above the
+11.prev-e Linux verification record and the 11.prev-e implementation record (both kept byte-intact as history; the
+prior `## Work unit (current)` heading was relabelled `## Work unit (previous)`).
+
+**Provenance, stated plainly:** these seven rows were produced by an operator session on a real Windows host, not by
+`gentle-ai-verify`, and **not independently reviewed**. No 4R lens ran, no verifier inspected the candidate, and this
+record claims no approval and no review outcome. Everything below is directly observed command output of that session.
+Nothing was staged, committed, pushed, reset, stashed, checked out, or published; no review lifecycle operation was
+started, answered, or acknowledged; **no checkbox was marked**.
+
+### (1) Outcome — three pass, two fail, two not executed
+
+| # | Claim | Verdict |
+| --- | --- | --- |
+| E1 | Same-user connection succeeds | **FAIL** |
+| E2 | ACL enforcement verified | **PASS** |
+| E3 | Foreign-user connection denied | **NOT EXECUTED** (no foreign account available) |
+| E4 | Remote / non-local connection denied | **NOT EXECUTED** (no second machine available) |
+| E5 | Fail-closed with no TCP/public/anonymous fallback | **PASS** |
+| E6 | Collision fails closed | **PASS** (exit code 4; literal `command_conflict` token not emitted) |
+| E7 | Production round trip smoke under `serve` | **FAIL** (round trip) / shutdown half **PASS** (`exit_code=0`) |
+
+**11.prev-e is NOT closed. Unit 11 remains blocked.** E1 fails as a product defect and E7's round trip fails for the
+same cause, so the 11.prev-e limited-acceptance letters (a)–(d) are not satisfied and no decision gate is crossed.
+
+### (2) Blocking finding BF-1 — the peer check denies every peer, including the operator
+
+`WindowsNamedPipeTransport.TryVerifyPeer` calls `NamedPipeServerStream.RunAsClient` **before any byte is read** (the
+accept loop's own comment says so: "denied before any byte is read"). On a byte-mode pipe `ImpersonateNamedPipeClient`
+refuses until data has been read from that pipe, so the call throws `System.IO.IOException` with
+`HResult=0x80070558` (`ERROR_CANNOT_IMPERSONATE`, 1368). The `catch (Exception) { return false; }` turns that into
+"different user", the accept loop disposes the instance, and the client's first `Write` fails with
+`ERROR_BROKEN_PIPE`.
+
+Proven by execution, not inference, with a minimal two-mode reproduction on the same host, same user, same byte-mode
+pipe, differing **only** in read ordering:
+
+| Order | Server result | Client result |
+| --- | --- | --- |
+| impersonate immediately (**the engine's order**) | `RunAsClient FAILED: System.IO.IOException \| HResult=0x80070558` | `System.IO.IOException: Pipe is broken` |
+| read one byte first, then impersonate | `impersonated peer = DESKTOP-P7H1D96\jesus` / `RunAsClient SUCCEEDED` | `wrote one byte` |
+
+Consequences established by that run: (i) `SeImpersonatePrivilege` is **not** the blocker (the operator is a standard
+user without it and still impersonated a same-user peer successfully); (ii) the ACL is **not** the blocker (the E2 probe
+opened the same pipe and read its descriptor); (iii) **every** peer is denied, so the whole local control surface
+(`hello`, `get_state`, `start`, …) is unreachable on Windows.
+
+### (3) What the passing rows do prove
+
+- **E2 (ACL).** Direct descriptor read of the live pipe: owner and group = operator SID, `D:P` (protected, no
+  inheritance), **exactly one** allow ACE for the operator SID with `AccessMask=0x001F019F`
+  (`PipeAccessRights.FullControl`), no `Everyone`/`Users`/`Authenticated Users`/`Anonymous`/`Network` ACE. The same
+  handle proves the kernel ACL **admits** the operator, which is what isolates the denial to the engine's own check.
+- **E5 (no fallback).** Baseline `rag_pipes=0`; during `serve` exactly one pipe, the derived endpoint
+  `rag-historical-loader-v1-4edcadf3017c70a0914c7e6f96b7f488`, matching an independent derivation by the operator
+  script; **zero** TCP listeners owned by the engine PID and no new listener during the run.
+- **E6 (collision).** Second instance exit code **4** with `serve: this engine could not own its pipe endpoint.`;
+  afterwards still exactly one pipe and the first instance alive — no replace, no delete, no rename.
+- **E7 shutdown half.** Driven with `CTRL_BREAK_EVENT` (a synthetic `CTRL_C_EVENT` is not deliverable from this
+  harness); .NET surfaces both through the same `Console.CancelKeyPress` handler the engine wires. An independent
+  P/Invoke watcher on the process handle recorded `exit_code=0`, the pipe was released, stdout/stderr were empty, and
+  the drain completed in ≈2.0–2.3 s against a 30 s bound. A default-handler kill would have exited `0xC000013A`, so
+  `0` proves the handler ran and `ServeAsync` returned 0 after the drain.
+
+### (4) Effect on the records beneath
+
+- The Linux verification record beneath states "no Windows machine ran, E1–E7 are **still unobserved**". That statement
+  was true for **its** work unit and is left byte-intact; **this** record supersedes it: a Windows host did run, and E1,
+  E7 failed while E2, E5, E6 passed.
+- **H1 of the 11.prev-e implementation record ("no Windows execution") is now discharged** — Windows execution happened
+  and its result is recorded. **H2's N2 ("same-user success") is refuted as implemented**, and `L5` in the evidence file
+  is revised from "design assumption" to "open blocking defect". N1 is partially discharged by E2; N3 (remote
+  rejection) **remains unproven** because E4 was never executed.
+- **E3 and E4 remain unobserved.** E2's descriptor read is supporting evidence for the DACL half of foreign-user denial
+  but is **not** a connect attempt and is not claimed as E3 evidence.
+
+### (5) Scope and side effects
+
+- **No checkbox was marked.** Every `#### 11.prev-e` row remains `[ ]`, as do the Unit 11.prev full prerequisite gate
+  and the delivery-decision record. `tasks.md` received annotation comments only — no `[x]`.
+- **Not touched:** `src/**`, `tests/**`, `Rag.sln`, every csproj, `design.md`, `verify-report.md`, CI, Docker/Compose,
+  and every pre-existing dirty/untracked path. No code was changed by this work unit, so the RED/GREEN/TRIANGULATE/
+  REFACTOR lifecycle was **not active**; the observed build and the reproductions are evidence, not TDD steps.
+- **Board regeneration could not run.** `python3 ~/scripts/openspec-espejo.py` does not exist on this host
+  (`~/scripts/openspec-espejo.py` is absent; `python3` is not on PATH, `python` is 3.12.3). Recorded as a deviation
+  rather than silently skipped.
+
+### Files changed (this work unit)
+
+- `docs/historical-ingestion-rebaseline/unit-11-prev-windows-pipe-security.md` — sections 4, 5 and 7 filled with the
+  observed evidence; header status updated; new §5.1 (root cause), §5.2 (signal-delivery deviation) and §5.3 (raw
+  artifact inventory); §3 amendment and `L5` revised. Sections 1 and 2 are byte-intact.
+- `openspec/changes/historical-ingestion-rebaseline/apply-progress.md` — this record added at the top; the prior
+  record's heading relabelled `## Work unit (current)` → `## Work unit (previous)` (body byte-intact).
+- `openspec/changes/historical-ingestion-rebaseline/tasks.md` — annotation comments on the two 11.prev-e evidence rows;
+  **no checkbox changed**.
+
+`skill_resolution`: `paths-injected` (gentle-ai `SKILL.md` read before repository work).
+
+## Work unit (previous) — 11.prev-e final Linux whole-solution verification (documentation only, inline fallback)
 
 Documentation-only record of the **final Linux whole-solution verification** for slice **11.prev-e**, added above the
 11.prev-e implementation record (kept byte-intact as history; only its heading relabelled
