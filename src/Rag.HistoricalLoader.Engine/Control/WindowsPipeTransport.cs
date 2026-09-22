@@ -27,8 +27,10 @@ namespace Rag.HistoricalLoader.Engine.Control;
 /// attempted;</item>
 /// <item>the pipe is created with <c>PIPE_REJECT_REMOTE_CLIENTS</c> and an owner-restricted, protected DACL
 /// that grants the current user's SID and nothing else;</item>
-/// <item>every accepted peer is impersonated and its token SID compared to this process's user SID before a
-/// single byte is dispatched; an unverifiable peer is denied.</item>
+/// <item>every accepted peer's token SID is compared to this process's user SID before a single byte is
+/// parsed or dispatched; an unverifiable peer is denied. Windows only permits the impersonation that reads
+/// that token after the peer has written, so exactly one byte is read first and replayed to the host
+/// unparsed.</item>
 /// </list>
 /// The ACL, the remote rejection, and the peer identity are enforced by the operating system, not by this
 /// engine's convention, and none of them is provable on Linux: the operator record in
@@ -412,12 +414,21 @@ internal sealed class WindowsNamedPipeTransport : IControlTransport
                 }
             }
 
-            // Peer identity first: a foreign, remote, or unverifiable peer is denied before any byte is read
-            // and before the host registers a connection slot.
-            if (!TryVerifyPeer(current))
+            // A fresh instance is created before the peer is verified, so the next peer always has a
+            // listener and a peer that connects without ever sending anything cannot hold the accept loop. A
+            // failure here stops accepting rather than weakening the endpoint.
+            var continuesAccepting = PrepareNextInstance();
+
+            // The peer check needs a byte. On a byte-mode pipe the operating system refuses to impersonate a
+            // client until data has been read from that pipe, so the boundary reads exactly one byte and hands
+            // it back to the host, unparsed, through PeerPrefixStream. A peer that sends nothing inside the
+            // read deadline, or whose token SID is not this process's, is denied before any byte is parsed or
+            // dispatched and before the host registers a connection slot.
+            var prefix = await TryReadPeerPrefixAsync(current, lifetime).ConfigureAwait(false);
+            if (prefix is null || !TryVerifyPeer(current))
             {
                 DisposeInstance(current);
-                if (!PrepareNextInstance())
+                if (!continuesAccepting)
                 {
                     return;
                 }
@@ -425,14 +436,35 @@ internal sealed class WindowsNamedPipeTransport : IControlTransport
                 continue;
             }
 
-            // A fresh instance is created before the peer is dispatched, so the next peer always has a
-            // listener. A failure here stops accepting rather than weakening the endpoint.
-            var continuesAccepting = PrepareNextInstance();
-            _ = DispatchAsync(current, handler, lifetime);
+            _ = DispatchAsync(current, new PeerPrefixStream(current, prefix), handler, lifetime);
             if (!continuesAccepting)
             {
                 return;
             }
+        }
+    }
+
+    /// <summary>
+    /// Reads the one byte the peer check must consume before the operating system will let this boundary
+    /// impersonate the client, or <see langword="null"/> when the peer sent nothing inside the read deadline.
+    /// The byte is returned to the host afterwards, never parsed here.
+    /// </summary>
+    private async Task<byte[]?> TryReadPeerPrefixAsync(NamedPipeServerStream instance, CancellationToken lifetime)
+    {
+        var prefix = new byte[1];
+
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(lifetime);
+        deadline.CancelAfter(_limits.ReadDeadline);
+        try
+        {
+            var read = await instance.ReadAsync(prefix.AsMemory(), deadline.Token).ConfigureAwait(false);
+            return read == prefix.Length ? prefix : null;
+        }
+        catch (Exception)
+        {
+            // A peer that left, stalled past the deadline, or faulted the read is denied: this boundary never
+            // verifies a peer it could not hear from.
+            return null;
         }
     }
 
@@ -442,12 +474,13 @@ internal sealed class WindowsNamedPipeTransport : IControlTransport
     /// </summary>
     private async Task DispatchAsync(
         NamedPipeServerStream instance,
+        Stream peer,
         Func<Stream, CancellationToken, Task> handler,
         CancellationToken lifetime)
     {
         try
         {
-            await handler(instance, lifetime).ConfigureAwait(false);
+            await handler(peer, lifetime).ConfigureAwait(false);
         }
         catch (Exception)
         {
@@ -476,6 +509,12 @@ internal sealed class WindowsNamedPipeTransport : IControlTransport
     /// Verifies the connected peer: the client is impersonated and its token's user SID must be this process's
     /// user SID. A peer the engine cannot impersonate or read is denied.
     /// </summary>
+    /// <remarks>
+    /// Impersonation is only possible once the peer has written to the pipe — the operating system refuses it
+    /// on a connection with no data — so the caller reads one byte first and replays it through
+    /// <see cref="PeerPrefixStream"/>. The window that existed before is gone: a refused connection carries no
+    /// frame because no byte is parsed until this check has passed.
+    /// </remarks>
     private bool TryVerifyPeer(NamedPipeServerStream instance)
     {
         try

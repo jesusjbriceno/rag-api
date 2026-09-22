@@ -520,6 +520,131 @@ public sealed class NamedPipeTransportTests
         }
     }
 
+    // ------------------------------------------------------------------------------------------------
+    // The peer check must read before it impersonates, so the byte it consumed on the way is handed to the
+    // host ahead of the peer's own stream. That buffer is portable, and these cases pin the part of the
+    // fix a Linux run CAN prove: the peer's bytes reach the host in order, none of them is lost or
+    // duplicated, and the stream refuses to pretend it can seek. The Windows ordering itself (that
+    // RunAsClient succeeds only after a read) is operator evidence in
+    // docs/historical-ingestion-rebaseline/unit-11-prev-windows-pipe-security.md, never a claim of this
+    // suite.
+    // ------------------------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task ThePeerPrefixStream_YieldsItsPreReadBytesBeforeTheUnderlyingStream()
+    {
+        var inner = new MemoryStream([0x68, 0x69]);
+        await using var peer = new PeerPrefixStream(inner, [0xAB, 0xCD]);
+
+        var read = new byte[16];
+        var total = 0;
+        while (total < 4)
+        {
+            var got = await peer.ReadAsync(read.AsMemory(total), CancellationToken.None);
+            Assert.True(got > 0, "a peer with buffered and inner bytes left must not report end of stream");
+            total += got;
+        }
+
+        Assert.Equal(4, total);
+        Assert.Equal(new byte[] { 0xAB, 0xCD, 0x68, 0x69 }, read[..4]);
+    }
+
+    [Fact]
+    public async Task ThePeerPrefixStream_ReturnsThePrefixFirst_AndNeverSkipsOrDuplicatesIt()
+    {
+        var inner = new MemoryStream([1, 2, 3]);
+        await using var peer = new PeerPrefixStream(inner, [0xAB]);
+
+        // A buffer far larger than the prefix must still not swallow the inner bytes into the same read:
+        // the buffered peer bytes are delivered first, so a caller that inspects the first read sees the
+        // byte the transport consumed, not the peer's payload.
+        var first = new byte[16];
+        var firstRead = await peer.ReadAsync(first.AsMemory(), CancellationToken.None);
+        Assert.Equal(1, firstRead);
+        Assert.Equal(0xAB, first[0]);
+
+        // ... and the very same byte is not replayed a second time.
+        var rest = new byte[16];
+        var restRead = await peer.ReadAsync(rest.AsMemory(), CancellationToken.None);
+        Assert.True(restRead > 0);
+        Assert.NotEqual(0xAB, rest[0]);
+    }
+
+    [Fact]
+    public async Task ThePeerPrefixStream_PreservesByteOrderAcrossSingleByteReads()
+    {
+        var inner = new MemoryStream([3, 4, 5]);
+        await using var peer = new PeerPrefixStream(inner, [1, 2]);
+
+        var seen = new List<byte>();
+        var one = new byte[1];
+        while (true)
+        {
+            var got = await peer.ReadAsync(one.AsMemory(), CancellationToken.None);
+            if (got == 0)
+            {
+                break;
+            }
+
+            seen.Add(one[0]);
+        }
+
+        Assert.Equal(new byte[] { 1, 2, 3, 4, 5 }, seen);
+    }
+
+    [Fact]
+    public async Task ThePeerPrefixStream_ReportsEndOfStreamOnlyAfterThePrefixAndTheInnerStreamAreExhausted()
+    {
+        var inner = new MemoryStream([]);
+        await using var peer = new PeerPrefixStream(inner, [7]);
+
+        var buffer = new byte[4];
+        Assert.Equal(1, await peer.ReadAsync(buffer.AsMemory(), CancellationToken.None));
+        Assert.Equal(0, await peer.ReadAsync(buffer.AsMemory(), CancellationToken.None));
+        Assert.Equal(0, await peer.ReadAsync(buffer.AsMemory(), CancellationToken.None));
+
+        // The synchronous path the frame codec may take reports the same thing, in the same order.
+        var sync = new MemoryStream([9]);
+        await using var syncPeer = new PeerPrefixStream(sync, [8]);
+        var syncBuffer = new byte[4];
+        Assert.Equal(1, syncPeer.Read(syncBuffer));
+        Assert.Equal(8, syncBuffer[0]);
+        Assert.Equal(1, syncPeer.Read(syncBuffer));
+        Assert.Equal(9, syncBuffer[0]);
+        Assert.Equal(0, syncPeer.Read(syncBuffer));
+    }
+
+    [Fact]
+    public async Task ThePeerPrefixStream_WithNoPrefix_BehavesAsTheUnderlyingStream()
+    {
+        var inner = new MemoryStream([0x41, 0x42]);
+        await using var peer = new PeerPrefixStream(inner, []);
+
+        var buffer = new byte[4];
+        Assert.Equal(2, await peer.ReadAsync(buffer.AsMemory(), CancellationToken.None));
+        Assert.Equal(new byte[] { 0x41, 0x42 }, buffer[..2]);
+        Assert.Equal(0, await peer.ReadAsync(buffer.AsMemory(), CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task ThePeerPrefixStream_PassesWritesThrough_AndRefusesToSeek()
+    {
+        var inner = new MemoryStream();
+        await using var peer = new PeerPrefixStream(inner, [0xAB]);
+
+        await peer.WriteAsync(new byte[] { 1, 2, 3 }.AsMemory(), CancellationToken.None);
+        await peer.FlushAsync();
+        Assert.Equal(new byte[] { 1, 2, 3 }, inner.ToArray());
+
+        Assert.True(peer.CanRead);
+        Assert.True(peer.CanWrite);
+        Assert.False(peer.CanSeek);
+        Assert.Throws<NotSupportedException>(() => peer.Seek(0, SeekOrigin.Begin));
+        Assert.Throws<NotSupportedException>(() => peer.SetLength(0));
+        Assert.Throws<NotSupportedException>(() => peer.Length);
+        Assert.Throws<NotSupportedException>(() => peer.Position);
+    }
+
     // --- helpers ------------------------------------------------------------
 
     private static ControlHostOptions HostOptions(TempDirectory directory) =>
