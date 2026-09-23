@@ -21,9 +21,13 @@ public sealed class OperationWorker(
     IOperationClaimRepository operationClaims,
     IOperationProcessor processor,
     IOptions<OperationWorkerOptions> options,
-    ILogger<OperationWorker> logger) : BackgroundService
+    ILogger<OperationWorker> logger,
+    HistoricalTelemetry? telemetry = null,
+    IOperationWorkloadClassifier? workloadClassifier = null) : BackgroundService
 {
     private readonly OperationWorkerOptions _options = options.Value;
+    private readonly HistoricalTelemetry _telemetry = telemetry ?? new HistoricalTelemetry();
+    private readonly IOperationWorkloadClassifier _workloadClassifier = workloadClassifier ?? new DefaultOperationWorkloadClassifier();
     private readonly string _workerId = string.IsNullOrWhiteSpace(options.Value.WorkerId)
         ? $"{Environment.MachineName}:{Guid.NewGuid():N}"
         : options.Value.WorkerId.Trim();
@@ -34,19 +38,31 @@ public sealed class OperationWorker(
         {
             try
             {
+                var claimedAt = DateTimeOffset.UtcNow;
                 var operation = await operationClaims.ClaimNextAsync(
                     _workerId,
-                    DateTimeOffset.UtcNow,
+                    claimedAt,
                     _options.LeaseDuration,
                     stoppingToken);
 
                 if (operation is not null)
                 {
-                    var disposition = await processor.ProcessAsync(operation, stoppingToken);
-                    logger.LogInformation(
-                        "Operation {OperationId} processing disposition is {Disposition}.",
-                        operation.Id,
-                        disposition);
+                    var workloadClass = _workloadClassifier.Classify(operation);
+                    _telemetry.Begin(operation.Id, workloadClass);
+                    _telemetry.RecordQueueWait(operation.Id, QueueWait(operation, claimedAt));
+                    try
+                    {
+                        var disposition = await processor.ProcessAsync(operation, stoppingToken);
+                        logger.LogInformation(
+                            "Operation {OperationId} processing disposition is {Disposition}.",
+                            operation.Id,
+                            disposition);
+                    }
+                    catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+                    {
+                        _telemetry.Complete(operation.Id, OperationTerminalState.LeaseLost, DateTimeOffset.UtcNow);
+                        throw;
+                    }
                 }
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
@@ -60,5 +76,12 @@ public sealed class OperationWorker(
 
             await Task.Delay(_options.PollInterval, stoppingToken);
         }
+    }
+
+    private static TimeSpan QueueWait(Operation operation, DateTimeOffset claimedAt)
+    {
+        var startedAt = operation.StartedAt ?? claimedAt;
+        var wait = startedAt - operation.CreatedAt;
+        return wait < TimeSpan.Zero ? TimeSpan.Zero : wait;
     }
 }

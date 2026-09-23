@@ -115,8 +115,9 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           # SBOM via the CycloneDX .NET global tool (XML output is the default).
-          # Re-verify the pinned tool version and flags before merge.
-          dotnet tool install --global CycloneDX --version 3.1.0
+          # The previous pin, 3.1.0, does not exist on NuGet, so this step failed the first time it was ever
+          # reached. 6.2.0 is verified to install and to accept these flags, writing bom.xml.
+          dotnet tool install --global CycloneDX --version 6.2.0
           dotnet CycloneDX src/Rag.Companion/Rag.Companion.csproj -o "$env:RUNNER_TEMP\sbom"
           # Deterministic third-party notices for the pinned companion dependencies.
           $notices = @"

@@ -6,6 +6,7 @@ using Npgsql;
 using Pgvector;
 using Pgvector.EntityFrameworkCore;
 using Rag.Application;
+using Rag.Domain;
 
 namespace Rag.Infrastructure;
 
@@ -123,6 +124,8 @@ public static class InfrastructureServiceCollectionExtensions
             .AddCheck<PostgreSqlReadinessHealthCheck>("postgresql", tags: ["ready"])
             .AddCheck<LlamaCppReadinessHealthCheck>("llama-cpp", tags: ["ready"]);
         services.AddSingleton<TxtChunker>();
+        services.AddSingleton<HistoricalTelemetry>();
+        services.AddSingleton<IOperationWorkloadClassifier, DefaultOperationWorkloadClassifier>();
         services.AddSingleton<IOperationProcessor, TxtOperationProcessor>();
         services.AddHostedService<OperationWorker>();
         return services;

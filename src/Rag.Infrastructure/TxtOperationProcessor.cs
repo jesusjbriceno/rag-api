@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text;
 using Microsoft.Extensions.Logging;
 using Rag.Application;
@@ -10,7 +11,8 @@ public sealed class TxtOperationProcessor(
     IImmutableContentStore contentStore,
     TxtChunker chunker,
     IEmbeddingProvider embeddingProvider,
-    ILogger<TxtOperationProcessor> logger) : IOperationProcessor
+    ILogger<TxtOperationProcessor> logger,
+    HistoricalTelemetry telemetry) : IOperationProcessor
 {
     private static readonly UTF8Encoding StrictUtf8 = new(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
 
@@ -22,10 +24,24 @@ public sealed class TxtOperationProcessor(
                 ?? throw new ProcessingException("load", "The document version no longer exists.");
             var content = await ReadContentAsync(target.Version, cancellationToken);
             var text = DecodeContent(content);
-            var chunks = ChunkContent(target.Version.Id, text);
-            var embeddings = await EmbedChunksAsync(target.Profile, chunks, cancellationToken);
 
-            return await operations.TryCompleteSuccessAsync(operation, target, chunks, embeddings, cancellationToken)
+            var chunkingStarted = Stopwatch.GetTimestamp();
+            var chunks = ChunkContent(target.Version.Id, text);
+            telemetry.RecordChunking(operation.Id, chunks.Count, Stopwatch.GetElapsedTime(chunkingStarted));
+
+            var embeddingStarted = Stopwatch.GetTimestamp();
+            var embeddings = await EmbedChunksAsync(target.Profile, chunks, cancellationToken);
+            telemetry.RecordEmbedding(operation.Id, 1, Stopwatch.GetElapsedTime(embeddingStarted));
+
+            var indexingStarted = Stopwatch.GetTimestamp();
+            var completed = await operations.TryCompleteSuccessAsync(operation, target, chunks, embeddings, cancellationToken);
+            telemetry.RecordIndexing(operation.Id, Stopwatch.GetElapsedTime(indexingStarted));
+            telemetry.Complete(
+                operation.Id,
+                completed ? OperationTerminalState.Succeeded : OperationTerminalState.LeaseLost,
+                DateTimeOffset.UtcNow);
+
+            return completed
                 ? OperationProcessingDisposition.Succeeded
                 : OperationProcessingDisposition.LeaseLost;
         }
@@ -36,11 +52,18 @@ public sealed class TxtOperationProcessor(
                 operation.Id,
                 exception.Stage,
                 exception.Message);
-            return await operations.TryCompleteFailureAsync(
+            var indexingStarted = Stopwatch.GetTimestamp();
+            var completed = await operations.TryCompleteFailureAsync(
                 operation,
                 exception.Stage,
                 Truncate(exception.Message),
-                cancellationToken)
+                cancellationToken);
+            telemetry.RecordIndexing(operation.Id, Stopwatch.GetElapsedTime(indexingStarted));
+            telemetry.Complete(
+                operation.Id,
+                completed ? OperationTerminalState.Failed : OperationTerminalState.LeaseLost,
+                DateTimeOffset.UtcNow);
+            return completed
                 ? OperationProcessingDisposition.Failed
                 : OperationProcessingDisposition.LeaseLost;
         }
@@ -51,11 +74,18 @@ public sealed class TxtOperationProcessor(
         catch (Exception exception)
         {
             logger.LogError(exception, "Operation {OperationId} failed during index persistence.", operation.Id);
-            return await operations.TryCompleteFailureAsync(
+            var indexingStarted = Stopwatch.GetTimestamp();
+            var completed = await operations.TryCompleteFailureAsync(
                 operation,
                 "index",
                 Truncate(exception.GetBaseException().Message),
-                cancellationToken)
+                cancellationToken);
+            telemetry.RecordIndexing(operation.Id, Stopwatch.GetElapsedTime(indexingStarted));
+            telemetry.Complete(
+                operation.Id,
+                completed ? OperationTerminalState.Failed : OperationTerminalState.LeaseLost,
+                DateTimeOffset.UtcNow);
+            return completed
                 ? OperationProcessingDisposition.Failed
                 : OperationProcessingDisposition.LeaseLost;
         }

@@ -4,8 +4,6 @@ namespace Rag.Companion.Tests;
 
 public sealed class LibreOfficeRunnerTests : IDisposable
 {
-    private static readonly bool IsWindows = OperatingSystem.IsWindows();
-
     // Common shell preamble: derive the --outdir value and the source path (last argument),
     // then compute the expected output filename (source basename minus extension, plus .txt).
     private const string ParsePreamble = """
@@ -30,10 +28,9 @@ name="$(basename "${src%.*}")"
 
     public void Dispose() => TryDelete(_base);
 
-    [Fact]
+    [LinuxFact]
     public async Task ConvertAsync_returns_single_utf8_output_on_success()
     {
-        SkipOnWindows();
         var (script, profile, output, source) = Setup(ParsePreamble + "printf 'converted text\\n' > \"$out/$name.txt\"\n");
 
         var text = await new LibreOfficeRunner(script).ConvertAsync(source, profile, output);
@@ -41,10 +38,9 @@ name="$(basename "${src%.*}")"
         Assert.Equal("converted text\n", text);
     }
 
-    [Fact]
+    [LinuxFact]
     public async Task ConvertAsync_passes_metachar_filename_as_a_single_argument()
     {
-        SkipOnWindows();
         var source = Path.Combine(_base, "doc $HOME & 'quoted' (1);x.doc");
         var argvFile = Path.Combine(_base, "argv.txt");
         var (script, profile, output, _) = Setup(
@@ -57,10 +53,9 @@ name="$(basename "${src%.*}")"
         Assert.Contains(source, lines);
     }
 
-    [Fact]
+    [LinuxFact]
     public async Task ConvertAsync_fails_when_binary_does_not_exist()
     {
-        SkipOnWindows();
         var source = Path.Combine(_base, "input.doc");
         var profile = Path.Combine(_base, "profile");
         var output = Path.Combine(_base, "out");
@@ -71,20 +66,18 @@ name="$(basename "${src%.*}")"
         Assert.NotNull(ex);
     }
 
-    [Fact]
+    [LinuxFact]
     public async Task ConvertAsync_fails_on_missing_output()
     {
-        SkipOnWindows();
         var (script, profile, output, source) = Setup(ParsePreamble); // exits 0, produces nothing
 
         await Assert.ThrowsAsync<LibreOfficeException>(() =>
             new LibreOfficeRunner(script).ConvertAsync(source, profile, output));
     }
 
-    [Fact]
+    [LinuxFact]
     public async Task ConvertAsync_fails_on_extra_output()
     {
-        SkipOnWindows();
         var (script, profile, output, source) = Setup(ParsePreamble + """
 printf 'one\n' > "$out/$name.txt"
 printf 'two\n' > "$out/other.txt"
@@ -94,10 +87,9 @@ printf 'two\n' > "$out/other.txt"
             new LibreOfficeRunner(script).ConvertAsync(source, profile, output));
     }
 
-    [Fact]
+    [LinuxFact]
     public async Task ConvertAsync_fails_on_reparse_output()
     {
-        SkipOnWindows();
         var (script, profile, output, source) = Setup(ParsePreamble + """
 printf 'real\n' > "$out/real.txt"
 ln -s real.txt "$out/$name.txt"
@@ -107,10 +99,9 @@ ln -s real.txt "$out/$name.txt"
             new LibreOfficeRunner(script).ConvertAsync(source, profile, output));
     }
 
-    [Fact]
+    [LinuxFact]
     public async Task ConvertAsync_fails_on_nonzero_exit()
     {
-        SkipOnWindows();
         var (script, profile, output, source) = Setup(ParsePreamble + "exit 3\n");
 
         var ex = await Assert.ThrowsAsync<LibreOfficeException>(() =>
@@ -119,10 +110,9 @@ ln -s real.txt "$out/$name.txt"
         Assert.Contains("code 3", ex.Message);
     }
 
-    [Fact]
+    [LinuxFact]
     public async Task ConvertAsync_times_out_and_kills_the_process_tree()
     {
-        SkipOnWindows();
         var childPidFile = Path.Combine(_base, "child.pid");
         var (script, profile, output, source) = Setup(ParsePreamble + $"""
 sleep 30 &
@@ -158,15 +148,6 @@ wait
         var output = Path.Combine(_base, "out");
         var src = source ?? Path.Combine(_base, "input.doc");
         return (script, profile, output, src);
-    }
-
-    private static void SkipOnWindows()
-    {
-        if (IsWindows)
-        {
-            // These tests drive a fake POSIX executable; a Windows CI job supplies its own fakes.
-            return;
-        }
     }
 
     private static async Task<bool> WaitUntilDeadAsync(int pid, TimeSpan timeout)

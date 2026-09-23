@@ -1,1 +1,8 @@
-tests/fixtures/import/sample.pdf -whitespace
+# The import fixtures are hashed byte for byte by
+# tests/Rag.Companion.Tests/ImportFixtureManifestTests, which compares the manifest's SHA-256 against the bytes
+# on disk. With core.autocrlf=true and no -text rule here, a Windows checkout rewrites the line endings of the
+# text fixtures - and of sample.pdf, which git also classified as text - so every manifest hash mismatched and the
+# companion-windows CI job failed three assertions. -text keeps the committed bytes intact on every platform,
+# which is what a hashed fixture requires. The earlier `sample.pdf -whitespace` rule only silenced whitespace
+# warnings and did not stop the conversion.
+tests/fixtures/import/* -text
