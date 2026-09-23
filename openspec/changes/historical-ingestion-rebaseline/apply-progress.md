@@ -1,6 +1,113 @@
 # Apply Progress: historical-ingestion-rebaseline
 
-## Work unit (current) — 11.prev-e final Linux whole-solution verification (documentation only, inline fallback)
+## Work unit (current) — 11.prev-e Windows evidence run started (documentation only, in-progress note)
+
+Documentation-only **in-progress note for slice 11.prev-e**, authorized explicitly by the user in the current session.
+It records exactly one fact: **the operator has started the Windows evidence run E1–E7 for 11.prev-e** — the execution
+is **under way**. It records **no results, no outcomes, and no verdicts**: nothing about E1–E7 has been observed,
+measured, or accepted by this session, and no claim is made about how the run will end.
+
+**No checkbox was changed, no evidence row was filled, and no source, test, csproj, `Rag.sln`, `design.md`,
+`verify-report.md`, evidence-template byte, ODD task checkbox, or protected path was touched; the Obsidian mirror was
+not regenerated; nothing was staged, committed, pushed, reset, stashed, checked out, or published; no build or test
+command was executed in this session; no review lifecycle operation was started, answered, or acknowledged.** Until the
+operator's run is recorded, every prior statement stands exactly as written in the records beneath:
+`docs/historical-ingestion-rebaseline/unit-11-prev-windows-pipe-security.md` remains a **template with seven empty
+evidence rows**, 11.prev-e acceptance letter **(b)** remains **unsatisfied**, the Unit 11.prev full prerequisite gate
+(a)–(h) remains unsatisfied, and **Unit 11 (WPF shell) remains blocked**. The pause is lifted **by recorded evidence,
+not by this note**.
+
+### Cross-references
+
+- `tasks.md` — the parent-owned pause note under `#### 11.prev-e` now records that the Windows run is **in progress**
+  with **no result and no accepted evidence yet**; no checkbox was touched.
+- `odd/windows-pipe-transport.md` — carries the matching **Windows verification in progress** status note; no task
+  checkbox was changed.
+
+### Files changed (this work unit)
+
+- `openspec/changes/historical-ingestion-rebaseline/apply-progress.md` — this note added at the top; the prior record's
+  heading relabelled `## Work unit (current)` → `## Work unit (previous)` (body byte-intact).
+- `openspec/changes/historical-ingestion-rebaseline/tasks.md` — the pause note under `#### 11.prev-e` updated to record
+  the in-progress state; no checkbox, no forecast/table prose, and no other line changed.
+- `odd/windows-pipe-transport.md` — an in-progress Windows verification status note added; no checkbox changed.
+  **These are the only files written by this work unit.**
+- **Not touched:** `src/**`, `tests/**`, `Rag.sln`, every csproj, `design.md`, `verify-report.md`, the evidence template
+  `docs/historical-ingestion-rebaseline/unit-11-prev-windows-pipe-security.md`, CI, Docker/Compose, the Obsidian mirror,
+  and every pre-existing dirty/untracked path.
+
+### TDD lifecycle evidence
+
+- RED: **not active for this work unit** — documentation-only in-progress note; no test was added or run.
+- GREEN: **not active as a lifecycle step for this work unit** — no validation command was executed in this session; no
+  figure of the operator's Windows run is cited or re-attributed, because none has been recorded or accepted yet.
+- TRIANGULATE/REFACTOR: **not applicable** — no behaviour, test, or production surface was changed by this note.
+
+`skill_resolution`: `paths-injected` (gentle-ai `SKILL.md` read before repository work).
+
+## Work unit (previous) — 11.prev-e paused pending Windows evidence (documentation only)
+
+Documentation-only **pause record for slice 11.prev-e**, authorized explicitly by the user in the current session. It records
+that the slice is **paused because the Windows operator window never opened**: evidence items **E1–E7 were not executed**,
+no Windows machine ran, and 11.prev-e acceptance letter **(b)** remains **unsatisfied**. It also records where the work
+stands and where it is recoverable, so the pause cannot be misread as a loss or as a closure.
+
+**No checkbox was changed, no source, test, csproj, `Rag.sln`, `design.md`, `verify-report.md`, ODD artifact, mirror byte,
+or protected path was touched; the Obsidian mirror was not regenerated; nothing was staged, committed, pushed, reset,
+stashed, checked out, or published; no build or test command was executed in this session; no review lifecycle operation
+was started, answered, or acknowledged.** The figures cited below are the already-recorded results of prior records, not
+a re-execution.
+
+### (1) Pause state — what is not done, and why
+
+| Field | Content |
+| --- | --- |
+| Paused slice | **11.prev-e — Windows named-pipe transport + pipe security evidence** |
+| Cause | **No Windows window.** The operator Windows machine required for E1–E7 was not available; no Windows execution happened in this or the prior 11.prev-e records (their H1 stands unchanged). |
+| Not executed | **E1–E7** (same-user connect, foreign-user denial, remote denial, ACL enforcement, fail-closed fallback, production `serve` round trip, per the evidence template). `docs/historical-ingestion-rebaseline/unit-11-prev-windows-pipe-security.md` remains a **template with seven empty evidence rows**. |
+| Unsatisfied acceptance | 11.prev-e acceptance letter **(b)** (real named-pipe transport verified on Windows) and the Unit 11.prev **full prerequisite gate item (h)** (Windows named-pipe round trip and ACL/peer/remote denial evidence). |
+| Consequence | **Unit 11 (WPF shell) remains blocked** by the full prerequisite gate (a)–(h). The pause record claims **no acceptance**, marks **no checkbox**, and invents **no evidence**; it authorizes no delivery and renews no exception. |
+| Lift condition | A Windows operator window becomes available; E1–E7 are then executed and recorded as written. The pause is lifted **by recorded evidence**, not by this note. |
+
+### (2) Verified state preserved across the pause
+
+- **Linux code verification stands (as previously recorded, not re-executed here):** `dotnet build Rag.sln --configuration
+  Release` — **0 errors** (8 pre-existing `NU1903` advisories, untouched) — and `dotnet test Rag.sln --configuration
+  Release --no-build` — **826 passed / 0 failed / 0 skipped**. These are the figures of the 11.prev-e Linux verification
+  record beneath; this session ran no build or test.
+- **Recoverable snapshot (existence observed read-only in this session):** commit **`1b89a6e`** ("chore(wip): preserve
+  historical loader control work") on branch **`feat/historical-ingestion-windows-probe`**. Verified read-only via
+  `git log --oneline -1 1b89a6e` and `git branch --contains 1b89a6e`; the branch exists and contains the commit. When the
+  Windows window opens, work resumes from this snapshot.
+
+### (3) Cross-references
+
+- `tasks.md` carries the matching parent-owned pause note under `#### 11.prev-e` (added by this work unit; no checkbox
+  touched — every `#### 11.prev-e` row remains `[ ]`, and the full prerequisite gate and delivery-decision record remain
+  `[ ]`).
+- The 11.prev-e implementation and Linux verification records beneath stand unchanged as history; their honest limits
+  (H1–H8, and the Linux-not-Windows N1–N7) are exactly the state this pause record preserves.
+
+### Files changed (this work unit)
+
+- `openspec/changes/historical-ingestion-rebaseline/apply-progress.md` — this record added at the top; the prior record's
+  heading relabelled `## Work unit (current)` → `## Work unit (previous)` (body byte-intact).
+- `openspec/changes/historical-ingestion-rebaseline/tasks.md` — one parent-owned pause note under `#### 11.prev-e`; no
+  checkbox, no forecast/table prose, and no other line changed. **These are the only files written by this work unit.**
+- **Not touched:** `src/**`, `tests/**`, `Rag.sln`, every csproj, `design.md`, `verify-report.md`, CI, Docker/Compose, the
+  Obsidian mirror, every ODD artifact, and every pre-existing dirty/untracked path.
+
+### TDD lifecycle evidence
+
+- RED: **not active for this work unit** — documentation-only pause record; no test was added or run. The 11.prev-e REDs
+  recorded beneath are unchanged and remain that work unit's evidence.
+- GREEN: **not active as a lifecycle step for this work unit** — no validation command was executed in this session; the
+  cited `0 errors / 826 / 0 / 0` figures belong to the previously recorded Linux verification run and are not re-attributed.
+- TRIANGULATE/REFACTOR: **not applicable** — no behaviour, test, or production surface was changed by this record.
+
+`skill_resolution`: `paths-injected` (gentle-ai `SKILL.md` read before repository work).
+
+## Work unit (previous) — 11.prev-e final Linux whole-solution verification (documentation only, inline fallback)
 
 Documentation-only record of the **final Linux whole-solution verification** for slice **11.prev-e**, added above the
 11.prev-e implementation record (kept byte-intact as history; only its heading relabelled

@@ -14,12 +14,14 @@ public static class AdminAuthenticationDefaults
 {
     public const string AuthenticationScheme = "Admin";
 
-    public const string AppIdHeader = "X-Admin-App-Id";
-    public const string KeyIdHeader = "X-Admin-Key-Id";
-    public const string TimestampHeader = "X-Admin-Timestamp";
-    public const string SignatureHeader = "X-Admin-Signature";
-    public const string AssertionHeader = "X-Admin-Assertion";
-    public const string IdempotencyKeyHeader = "Idempotency-Key";
+    // Header names are aliased to the shared Rag.Infrastructure wire contract so the
+    // AdminApp BFF and the API cannot drift. Preserved here for compatibility.
+    public const string AppIdHeader = AdminAuthenticationContract.AppIdHeader;
+    public const string KeyIdHeader = AdminAuthenticationContract.KeyIdHeader;
+    public const string TimestampHeader = AdminAuthenticationContract.TimestampHeader;
+    public const string SignatureHeader = AdminAuthenticationContract.SignatureHeader;
+    public const string AssertionHeader = AdminAuthenticationContract.AssertionHeader;
+    public const string IdempotencyKeyHeader = AdminAuthenticationContract.IdempotencyKeyHeader;
 
     public const string ActorSubjectClaim = "admin_actor_subject";
     public const string AppIdClaim = "admin_app_id";
@@ -32,8 +34,6 @@ public sealed class AdminAuthenticationHandler(
     ILoggerFactory logger,
     UrlEncoder encoder) : AuthenticationHandler<AuthenticationSchemeOptions>(options, logger, encoder)
 {
-    private const int MaxAdminBodyBytes = 1_048_576;
-
     protected override async Task<AuthenticateResult> HandleAuthenticateAsync()
     {
         if (Request.Headers.Keys.Any(AdminIdentityHeaderPolicy.IsForbidden))
@@ -134,7 +134,7 @@ public sealed class AdminAuthenticationHandler(
         while ((read = await Request.Body.ReadAsync(chunk, Context.RequestAborted)) > 0)
         {
             buffer.Write(chunk, 0, read);
-            if (buffer.Length > MaxAdminBodyBytes)
+            if (buffer.Length > AdminAuthenticationContract.MaxBodyBytes)
             {
                 return null;
             }

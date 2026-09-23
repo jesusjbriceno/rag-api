@@ -14,3 +14,5 @@ obj/
 *.key
 content/
 backups/
+# Local Pi runtime state
+.atl/

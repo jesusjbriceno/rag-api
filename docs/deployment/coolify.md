@@ -1,6 +1,6 @@
 # Deploy the private RAG stack with Coolify
 
-Deploy this Compose stack privately, then let approved client stacks reach only the API over Coolify's predefined network. PostgreSQL and llama.cpp remain stack-internal.
+Deploy this Compose stack privately, then let approved client stacks reach only the API over Coolify's predefined network. PostgreSQL and llama.cpp remain stack-internal. The AdminApp BFF (the `admin` service) is the only publicly routed service, and only behind Cloudflare Access; its deployment has a dedicated [runbook](adminapp-coolify.md).
 
 ## Quick path
 
@@ -26,6 +26,8 @@ Set these values in Coolify's deployment environment. Do not commit them, add th
 | `JWT__CURRENT_SIGNING_KEY__PRIVATE_KEY_PEM` | Active RSA private PEM |
 | `JWT__VALIDATION_KEYS__0__KEY_ID` | Active RSA validation key identifier |
 | `JWT__VALIDATION_KEYS__0__PUBLIC_KEY_PEM` | Active RSA public PEM |
+
+The `admin` service adds its own required configuration references — image reference, Cloudflare Access validation, assertion, AdminApp authentication, internal API origin, administrator allowlist, and FQDN. They are listed in [AdminApp configuration references](adminapp-coolify.md#adminapp-configuration-references) and follow the same rules: deployment-only secrets, no defaults, no literal values in the repository.
 
 ### JWT key rotation
 
@@ -80,6 +82,8 @@ Do not use `postgres` or `llama-cpp` from client stacks. Those names resolve onl
 | `llama-cpp` | Local verified GGUF | CPU-only embedding runtime starts offline |
 | `api` liveness | `/api/v1/health/live` | The API process is alive; no dependencies are checked |
 | `api` readiness | `/api/v1/health/ready` | PostgreSQL is reachable and llama.cpp `GET /health` returns a valid `200` ready response |
+| `admin` liveness | `/health/live` | The BFF process is alive; no dependencies are checked |
+| `admin` readiness | `/health/ready` | The configured administrative API is reachable; `503` otherwise |
 
 Readiness treats llama.cpp `503` loading responses, transport failures, and malformed `200` responses as unhealthy. It does not generate an embedding or trigger model download. Both health routes are anonymous. Every collection, ingestion, operation, and retrieval route remains JWT-protected.
 
@@ -134,15 +138,15 @@ The ordinary `vX.Y.Z` or `develop-<sha>` reference is the deployment contract. I
 
 ### Publication completion record
 
-A visible GHCR tag is not publication-completion evidence. Each successful dual-image finalization writes one durable GitHub Deployment record with `environment` and `task` both set to `publication-completion`; its deployment ID is the completion-marker identity. The marker payload records the source revision, workflow run ID and URL, both ordinary multi-platform index references and digests, and each AMD64/ARM64 digest plus its architecture tag. It records attached signature/SPDX/SLSA evidence for platform manifests and signature/SLSA evidence for the index.
+A visible GHCR tag is not publication-completion evidence. Each successful three-image finalization writes one durable GitHub Deployment record with `environment` and `task` both set to `publication-completion`; its deployment ID is the completion-marker identity. The marker payload uses completion-marker schema version 3 and records exactly the `admin`, `api`, and `operator` images — no additional or missing image is accepted — with deterministic component ordering, two platforms per image, and homogeneous `source_revision`, `workflow` (`run_id` and URL), `publication_tag`, and `signature` across all three. Per image it records the source revision, workflow run ID and URL, the ordinary multi-platform index reference and digest, and each AMD64/ARM64 digest plus its architecture tag. It records attached signature/SPDX/SLSA evidence for each platform manifest and signature/SLSA evidence for each index — three indexes and six platform manifests in total.
 
-The marker is written only after both API and operator final tags resolve to their respective immutable digests. Re-runs for the same source and image pair reuse the existing successful marker; records are retained as publication evidence and are not pruned with GHCR tags or workflow artifacts. `ci-develop.yml` never creates a GitHub Release. The release workflow creates its GitHub Release only after its completion marker exists.
+The marker is written only after the `admin`, `api`, and `operator` final tags all resolve to their respective immutable digests and all three publication proofs exist. Re-runs for the same source and image set reuse the existing successful marker; records are retained as publication evidence and are not pruned with GHCR tags or workflow artifacts. `ci-develop.yml` never creates a GitHub Release. The release workflow creates its GitHub Release only after its completion marker exists.
 
-Signature, SPDX, and SLSA verification runs afterwards in a separate read-only verification job. It verifies signatures and SLSA for each index plus signatures, SPDX, and SLSA for all four platform manifests. Its check run reports `verified`, `failed`, or `unknown`; it has no permission to write packages, tags, releases, or deployment markers, so its result cannot alter completion. A failed or unknown verification result must be investigated before deployment even though it does not rewrite the durable publication record.
+Signature, SPDX, and SLSA verification runs afterwards in a separate read-only verification job. It consumes the schema-v3 marker and verifies signatures and SLSA for each of the three indexes plus signatures, SPDX, and SLSA for all six platform manifests (three images × two architectures). Its check run reports `verified`, `failed`, or `unknown`; it has no permission to write packages, tags, releases, or deployment markers, so its result cannot alter completion. A failed or unknown verification result must be investigated before deployment even though it does not rewrite the durable publication record.
 
 ### Verify signatures and SBOM
 
-Verify a release tag before pinning it. Repeat for both `rag-api` and `rag-operator`.
+Verify a release tag before pinning it. Repeat for all three published images — `rag-api`, `rag-operator`, and `rag-adminapp`.
 
 ```bash
 IDENTITY="https://github.com/jesusjbriceno/rag-api/.github/workflows/ci-release.yml@refs/tags/v0.1.0-rc.1"
@@ -186,28 +190,32 @@ The manifest output must list `linux/amd64` and `linux/arm64`. Use the marker's 
 
 ### Pin an immutable image
 
-`compose.coolify.yaml` accepts only the two exact application repositories with `pull_policy: always`. Set both Coolify environment variables using one of these supported reference models:
+`compose.coolify.yaml` accepts only the three exact application repositories with `pull_policy: always`. Set the three Coolify image-reference environment variables using one of these supported reference models:
 
-| Model | `RAG_API_IMAGE_REFERENCE` | `RAG_OPERATOR_IMAGE_REFERENCE` | Use when |
-| --- | --- | --- | --- |
-| Coordinated immutable tags | `:v0.1.0-rc.1` | `:v0.1.0-rc.1` | Normal deployment and rollback. The tags must match. |
-| Repository-specific index digest pins | `@sha256:<api-index-64-lowercase-hex>` | `@sha256:<operator-index-64-lowercase-hex>` | Maximum pinning after recording and verifying both published multi-platform indexes. |
+| Model | `RAG_API_IMAGE_REFERENCE` | `RAG_OPERATOR_IMAGE_REFERENCE` | `RAG_ADMINAPP_IMAGE_REFERENCE` | Use when |
+| --- | --- | --- | --- | --- |
+| Coordinated immutable tags | `:v0.1.0-rc.1` | `:v0.1.0-rc.1` | `:v0.1.0-rc.1` | Normal deployment and rollback. The API and operator tags must match. The AdminApp tag is selected independently of that pair. |
+| Repository-specific index digest pins | `@sha256:<api-index-64-lowercase-hex>` | `@sha256:<operator-index-64-lowercase-hex>` | `@sha256:<adminapp-index-64-lowercase-hex>` | Maximum pinning after recording and verifying the published multi-platform indexes. |
 
-For a develop pre-release, use the same `:develop-<40-lowercase-hex-sha>` suffix for both variables. Never use `latest`, an empty suffix, a floating channel, a malformed digest, a tag combined with a digest, or one tag reference with one digest reference. The validator rejects those forms and any repository other than the API and operator repositories above.
+For a develop pre-release, use the same `:develop-<40-lowercase-hex-sha>` suffix for all three variables. Never use `latest`, an empty suffix, a floating channel, a malformed digest, a tag combined with a digest, or one tag reference with one digest reference. The validator rejects those forms and any repository other than the API, operator, and AdminApp repositories above.
 
-**Dokploy ARM64 happy path:** verify each ordinary release or develop tag with cosign, confirm each manifest lists `linux/amd64` and `linux/arm64`, then set both suffixes to their repository-specific **index** `@sha256:...` values from one completion marker. Deploy the unchanged pull-only Compose stack. `pull_policy: always` pulls the index and Docker selects ARM64 automatically; Dokploy never falls back to a local build.
+The `admin` service adds `RAG_ADMINAPP_IMAGE_REFERENCE` for `ghcr.io/jesusjbriceno/rag-adminapp` under the same immutable-reference rules and verification contract; see [the AdminApp runbook](adminapp-coolify.md). Its completion proof arrives in the same schema-v3 `publication-completion` marker as the API and operator images.
+
+**Coolify ARM64 happy path:** verify each ordinary release or develop tag with cosign, confirm each manifest lists `linux/amd64` and `linux/arm64`, then set all three suffixes to their repository-specific **index** `@sha256:...` values from one completion marker. Deploy the unchanged pull-only Compose stack. `pull_policy: always` pulls the index and Docker selects ARM64 automatically; Coolify never falls back to a local build.
 
 ### Roll back
 
 1. Verify the previous release tag with cosign and its required attestations.
-2. Set both image-reference variables to the same previous `:vX.Y.Z` suffix, then redeploy the stack.
+2. Set the API and operator image-reference variables to the same previous `:vX.Y.Z` suffix, then redeploy the stack.
 3. Confirm `GET /api/v1/health/ready` returns `200`.
 
-Rollback re-pulls the previously verified immutable tag. A pull failure fails deployment without falling back to a local build. For digest-pinned deployment, copy both ordinary multi-platform index `digest_ref` values from the same durable `publication-completion` record, verify and inspect each index, set each variable to its `@sha256:...` suffix, and redeploy. Confirm `GET /api/v1/health/ready` returns `200`.
+Rollback re-pulls the previously verified immutable tag. A pull failure fails deployment without falling back to a local build. For digest-pinned deployment, copy the API and operator ordinary multi-platform index `digest_ref` values from the same durable `publication-completion` record, verify and inspect each index, set each variable to its `@sha256:...` suffix, and redeploy. Confirm `GET /api/v1/health/ready` returns `200`.
+
+Rolling back `admin` is independent: set `RAG_ADMINAPP_IMAGE_REFERENCE` to the previous verified immutable reference and redeploy. The BFF is stateless; no data migration is involved. See [Rollback](adminapp-coolify.md#rollback).
 
 ## Out of scope
 
-- Public domains or host-published RAG service ports.
+- Public domains or host-published ports for the API, PostgreSQL, and llama.cpp. AdminApp is the sole publicly routed service, behind Cloudflare Access ([runbook](adminapp-coolify.md)).
 - Custom Coolify Compose networks.
 - GPU/NVIDIA runtime configuration.
 - General-infrastructure model runtime or automation deployment.

@@ -1,6 +1,6 @@
 # Private RAG API delivery
 
-This repository deploys the RAG API, PostgreSQL with pgvector, a private CPU-only llama.cpp embedding runtime, database migration, and verified model download as one private Coolify Compose stack. The API has no public domain or published production port.
+This repository deploys the RAG API, PostgreSQL with pgvector, a private CPU-only llama.cpp embedding runtime, database migration, and verified model download as one private Coolify Compose stack. The API has no public domain or published production port. The AdminApp BFF joins the same stack as the only publicly routed service, behind Cloudflare Access; its deployment is documented in [the AdminApp runbook](docs/deployment/adminapp-coolify.md).
 
 ## Quick path
 
@@ -8,6 +8,8 @@ This repository deploys the RAG API, PostgreSQL with pgvector, a private CPU-onl
 2. Add the deployment secrets listed in [Coolify delivery](docs/deployment/coolify.md#secret-inventory) and the matching immutable image-reference suffixes described in [Pin an immutable image](docs/deployment/coolify.md#pin-an-immutable-image); never upload this repository's `.env.example` as production configuration.
 3. Deploy. Coolify starts PostgreSQL, downloads and verifies the immutable Qwen GGUF, applies the idempotent migration, then starts llama.cpp and the API.
 4. From a separate client stack, use Coolify's generated full API hostname on its predefined network. Do not create a domain or publish a port for this stack.
+
+To also deploy the AdminApp BFF — the only publicly routed service, behind Cloudflare Access — follow [the AdminApp runbook](docs/deployment/adminapp-coolify.md) after this stack is ready.
 
 For local-only access, copy `.env.example` to `.env` with disposable values and run:
 
@@ -42,6 +44,7 @@ This is a forward-only empty-data cutover. The migration stops before the runtim
 | Dependency readiness | `GET /api/v1/health/ready` |
 | Database migration | `Rag.Operator migrate` |
 | Create client credentials | `Rag.Operator issue <service-client-name>` |
+| AdminApp BFF health | `GET /health/live` and `GET /health/ready` on the `admin` service |
 | Backup contract | `scripts/backup-rag.sh <backup-id> <output-directory> <content-directory>` |
 
 Health endpoints are intentionally anonymous for orchestration. All data routes remain protected by the fallback JWT authorization policy.
@@ -77,9 +80,9 @@ For `develop-<sha>` images, use `--certificate-identity "https://github.com/jesu
 
 ## Pin and roll back
 
-Production Compose pulls only the exact `ghcr.io/jesusjbriceno/rag-api` and `ghcr.io/jesusjbriceno/rag-operator` repositories with `pull_policy: always`. Set `RAG_API_IMAGE_REFERENCE` and `RAG_OPERATOR_IMAGE_REFERENCE` to matching ordinary immutable tag suffixes (for example, `:v0.1.0-rc.1`) or to each verified multi-platform index `@sha256:...` suffix. Docker selects `linux/arm64` automatically on an ARM64 Dokploy host.
+Production Compose pulls only the exact `ghcr.io/jesusjbriceno/rag-api`, `ghcr.io/jesusjbriceno/rag-operator`, and `ghcr.io/jesusjbriceno/rag-adminapp` repositories with `pull_policy: always`. Set `RAG_API_IMAGE_REFERENCE`, `RAG_OPERATOR_IMAGE_REFERENCE`, and `RAG_ADMINAPP_IMAGE_REFERENCE` to matching ordinary immutable tag suffixes (for example, `:v0.1.0-rc.1`) or to each verified multi-platform index `@sha256:...` suffix. Docker selects `linux/arm64` automatically on an ARM64 Dokploy host.
 
-To roll back, set both suffixes to the previous verified release tag and redeploy: the stack re-pulls the immutable image, and a pull failure never falls back to a local build. The full operator contract, including digest-pin verification, is in [the deployment guide](docs/deployment/coolify.md#image-publication-verification-and-rollback).
+To roll back, set both API and operator suffixes to the previous verified release tag and redeploy: the stack re-pulls the immutable image, and a pull failure never falls back to a local build. Rolling back AdminApp is independent — set `RAG_ADMINAPP_IMAGE_REFERENCE` to the previous verified immutable reference and redeploy; the BFF is stateless and no data migration is involved. The full operator contract, including digest-pin verification, is in [the deployment guide](docs/deployment/coolify.md#image-publication-verification-and-rollback).
 
 ## Deployment checklist
 
@@ -114,6 +117,7 @@ An external scheduler can run `scripts/backup-rag.sh`, but the scheduler owns re
 ## Delivery boundaries
 
 - Production Compose intentionally has no `ports`, `domains`, or custom `networks` declarations.
+- AdminApp is the only publicly routed service, and only behind Cloudflare Access; its FQDN is an environment reference, never a literal hostname in the repository.
 - PostgreSQL and llama.cpp are internal stack dependencies; external client stacks receive access only to the API when connected through Coolify's predefined network.
 - The runtime is CPU-only and uses a locally mounted, verified GGUF. GPU/NVIDIA runtime configuration is not part of this stack.
 - General-infrastructure model runtimes and automation remain outside this RAG delivery boundary.

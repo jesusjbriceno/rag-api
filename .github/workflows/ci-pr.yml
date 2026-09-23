@@ -24,6 +24,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@eef61447b9ff4aafe5dcd4e0bbf5d482be7e7871 # v4.2.1
         with:
+          # Full history so the legacy-service Compose guard can compare
+          # compose.coolify.yaml against the develop base ref.
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Set up .NET
@@ -40,10 +43,23 @@ jobs:
       - name: Test
         run: dotnet test Rag.sln --configuration Release --no-build
 
+      # Real build + inspect verification of the admin Docker target (default
+      # mode of the script: static assertions plus docker build/inspect).
+      - name: Verify admin Docker target
+        run: bash scripts/test-admin-docker-target.sh
+
       - name: Validate production Compose
         run: |
           bash scripts/validate-coolify-compose.sh
           python3 scripts/test-validate-coolify-compose.py
+
+      # Unit 4 boundary guard: the legacy five-service block (postgres,
+      # model-download, llama-cpp, migrate, api) must remain byte-equivalent
+      # to develop; only the admin service may be added on top of it. This
+      # proves a repository invariant only — it does not exercise Coolify
+      # routing, Cloudflare Access, DNS, or firewall behaviour.
+      - name: Guard legacy Compose services
+        run: bash scripts/test-compose-coolify-untouched.sh
 
       - name: Test CI publication guards
         run: |
@@ -51,6 +67,7 @@ jobs:
           bash scripts/test-ci-publication-marker.sh
           bash scripts/test-ci-publication-verifier.sh
           bash scripts/test-ci-multiarch-index.sh
+          bash scripts/test-ci-admin-workflow.sh
 
       - name: Lint workflows with actionlint
         env:

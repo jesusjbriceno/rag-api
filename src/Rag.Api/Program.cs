@@ -9,13 +9,16 @@ using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.IdentityModel.Tokens;
 using Rag.Api;
+using Rag.Api.Historical;
 using Rag.Application;
+using Rag.Application.Auth;
 using Rag.Infrastructure;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddApplication();
 builder.Services.AddInfrastructure(builder.Configuration);
+builder.Services.AddHistoricalIngestion();
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddJwtBearer(options =>
     {
@@ -78,7 +81,14 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
 builder.Services.AddAuthorizationBuilder()
     .SetFallbackPolicy(new Microsoft.AspNetCore.Authorization.AuthorizationPolicyBuilder()
         .RequireAuthenticatedUser()
-        .Build());
+        .RequireAssertion(context => context.User.Claims.All(claim => claim.Type != "scope"))
+        .Build())
+    .AddPolicy(HistoricalAuthorizationPolicies.UploadsWrite, policy => policy
+        .RequireAuthenticatedUser()
+        .RequireAssertion(context => HasHistoricalScope(context.User, HistoricalScopes.UploadsWrite)))
+    .AddPolicy(HistoricalAuthorizationPolicies.OperationsRead, policy => policy
+        .RequireAuthenticatedUser()
+        .RequireAssertion(context => HasHistoricalScope(context.User, HistoricalScopes.OperationsRead)));
 if (builder.Configuration.GetValue<bool>("AdminPlane:Enabled"))
 {
     builder.Services.AddAuthentication()
@@ -96,6 +106,13 @@ builder.Services.AddRateLimiter(options =>
     {
         limiterOptions.PermitLimit = 5;
         limiterOptions.Window = TimeSpan.FromMinutes(1);
+        limiterOptions.QueueLimit = 0;
+    });
+    var historicalLimits = builder.Configuration.GetSection(HistoricalIngestionOptions.SectionName).Get<HistoricalIngestionOptions>() ?? new HistoricalIngestionOptions();
+    options.AddFixedWindowLimiter(HistoricalRateLimitPolicies.Uploads, limiterOptions =>
+    {
+        limiterOptions.PermitLimit = historicalLimits.UploadsRateLimitPermit;
+        limiterOptions.Window = historicalLimits.UploadsRateLimitWindow;
         limiterOptions.QueueLimit = 0;
     });
 });
@@ -127,10 +144,14 @@ var informationalVersion = typeof(Program).Assembly
 app.MapGet("/api/v1/health", () => Results.Ok(new { status = "healthy", version = informationalVersion })).AllowAnonymous();
 app.MapPost("/api/v1/auth/token", async (TokenExchangeRequest request, CredentialExchangeHandler handler, CancellationToken cancellationToken) =>
     {
-        var token = await handler.ExchangeAsync(request.KeyId, request.Secret, cancellationToken);
-        return token is null
-            ? Results.Problem(statusCode: StatusCodes.Status401Unauthorized, title: "Unauthorized")
-            : Results.Ok(new { access_token = token.Value, token_type = "Bearer", expires_in = 900 });
+        var result = await handler.ExchangeScopedAsync(request.KeyId, request.Secret, request.Scope, cancellationToken);
+        return result.Outcome switch
+        {
+            TokenExchangeOutcome.Unauthorized => Results.Problem(statusCode: StatusCodes.Status401Unauthorized, title: "Unauthorized"),
+            TokenExchangeOutcome.InvalidScope => Results.Problem(statusCode: StatusCodes.Status400BadRequest, title: "invalid_scope"),
+            _ when result.Token!.Scope is null => Results.Ok(new { access_token = result.Token.Value, token_type = "Bearer", expires_in = 900 }),
+            _ => Results.Ok(new { access_token = result.Token!.Value, token_type = "Bearer", expires_in = 900, scope = result.Token.Scope }),
+        };
     })
     .AllowAnonymous()
     .RequireRateLimiting("credential-exchange");
@@ -254,11 +275,20 @@ if (builder.Configuration.GetValue<bool>("AdminPlane:Enabled"))
     app.MapAdminEndpoints();
 }
 
+app.MapHistoricalEndpoints();
+
 app.Run();
+
+static bool HasHistoricalScope(ClaimsPrincipal user, string requiredScope)
+{
+    var scopes = user.FindAll("scope")
+.SelectMany(claim => (claim.Value ?? string.Empty).Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+    return scopes.Contains(requiredScope, StringComparer.Ordinal);
+}
 
 public partial class Program;
 
-public sealed record TokenExchangeRequest(string? KeyId, string? Secret);
+public sealed record TokenExchangeRequest(string? KeyId, string? Secret, string? Scope);
 
 public sealed record CreateCollectionRequest(string? Name);
 

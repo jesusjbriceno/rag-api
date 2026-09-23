@@ -15,6 +15,7 @@ using Npgsql;
 using Pgvector;
 using Pgvector.EntityFrameworkCore;
 using Rag.Application;
+using Rag.Application.Auth;
 using Rag.Domain;
 using Rag.Infrastructure;
 
@@ -130,6 +131,77 @@ public sealed class ProtectedApiTests(PostgreSqlFixture fixture) : IAsyncLifetim
         AssertProblem(incompatibleSearch, HttpStatusCode.UnprocessableEntity);
     }
 
+    [Fact]
+    public async Task Historical_scope_exchange_is_rejected_by_the_default_feature_gate()
+    {
+        var historical = await CreateHistoricalClientAsync(_factory);
+
+        var response = await _client.PostAsJsonAsync("/api/v1/auth/token", new
+        {
+            keyId = historical.KeyId,
+            secret = historical.Secret,
+            scope = $"{HistoricalScopes.UploadsWrite} {HistoricalScopes.OperationsRead}",
+        });
+
+        AssertProblem(response, HttpStatusCode.BadRequest);
+        Assert.Contains("invalid_scope", await response.Content.ReadAsStringAsync(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Historical_scoped_token_is_issued_with_the_legacy_grant_and_denied_on_real_time_routes()
+    {
+        using var enabledFactory = new ProtectedApiFactory(fixture.ConnectionString, _contentRoot, enableHistoricalIngestion: true);
+        using var enabledClient = enabledFactory.CreateClient();
+        var historical = await CreateHistoricalClientAsync(enabledFactory);
+
+        var exchange = await enabledClient.PostAsJsonAsync("/api/v1/auth/token", new
+        {
+            keyId = historical.KeyId,
+            secret = historical.Secret,
+            scope = $"{HistoricalScopes.UploadsWrite} {HistoricalScopes.OperationsRead}",
+        });
+        var exchangeBody = await exchange.Content.ReadAsStringAsync();
+        var gate = enabledFactory.Services.GetRequiredService<HistoricalIngestionOptions>().Enabled;
+        var raw = enabledFactory.Services.GetRequiredService<Microsoft.Extensions.Configuration.IConfiguration>()["HistoricalIngestion:Enabled"];
+        Assert.True(exchange.StatusCode == HttpStatusCode.OK, $"status={exchange.StatusCode} gate={gate} raw='{raw}' body={exchangeBody}");
+        var scopedToken = (await exchange.Content.ReadFromJsonAsync<TokenResponse>())!;
+        Assert.Equal("historical:operations.read historical:uploads.write", scopedToken.Scope);
+
+        var legacyExchange = await enabledClient.PostAsJsonAsync("/api/v1/auth/token", new { keyId = historical.KeyId, secret = historical.Secret });
+        var legacyToken = (await legacyExchange.Content.ReadFromJsonAsync<TokenResponse>())!;
+        Assert.Null(legacyToken.Scope);
+
+        var legacyCreate = await SendWithClientAsync(enabledClient, legacyToken.AccessToken, HttpMethod.Post, "/api/v1/collections", "application/json", "{\"name\":\"legacy-compatible-collection\"}");
+        Assert.Equal(HttpStatusCode.Created, legacyCreate.StatusCode);
+
+        var denied = await SendWithClientAsync(enabledClient, scopedToken.AccessToken, HttpMethod.Post, "/api/v1/collections", "application/json", "{\"name\":\"should-not-exist\"}");
+        Assert.Equal(HttpStatusCode.Forbidden, denied.StatusCode);
+    }
+
+    private async Task<HistoricalClient> CreateHistoricalClientAsync(ProtectedApiFactory factory)
+    {
+        using var scope = factory.Services.CreateScope();
+        var issued = await scope.ServiceProvider.GetRequiredService<CredentialOperator>().IssueAsync($"historical-{Guid.NewGuid():N}", null);
+
+        var options = new DbContextOptionsBuilder<IngestionDbContext>()
+            .UseNpgsql(fixture.ConnectionString, providerOptions => providerOptions.UseVector())
+            .Options;
+        await using var context = new IngestionDbContext(options);
+        var legacy = new Collection(Guid.NewGuid(), issued.ServiceClientId, "legacy", DateTimeOffset.UtcNow, EmbeddingProfile.Default);
+        context.Collections.Add(legacy);
+        context.ServiceClientGrants.Add(new ServiceClientGrantEntity
+        {
+            Id = Guid.NewGuid(),
+            ServiceClientId = issued.ServiceClientId,
+            Scopes = $"{HistoricalScopes.UploadsWrite} {HistoricalScopes.OperationsRead}",
+            CollectionId = legacy.Id,
+            Version = 1,
+            CreatedAt = DateTimeOffset.UtcNow,
+        });
+        await context.SaveChangesAsync();
+        return new HistoricalClient(issued.KeyId, issued.Secret, issued.ServiceClientId, legacy.Id);
+    }
+
     private async Task<ApiClient> CreateAuthenticatedClientAsync(string name)
     {
         using var scope = _factory.Services.CreateScope();
@@ -190,12 +262,13 @@ public sealed class ProtectedApiTests(PostgreSqlFixture fixture) : IAsyncLifetim
     }
 
     private sealed record ApiClient(Guid ServiceClientId, string Token);
-    private sealed record TokenResponse([property: JsonPropertyName("access_token")] string AccessToken);
+    private sealed record HistoricalClient(string KeyId, string Secret, Guid ServiceClientId, Guid LegacyCollectionId);
+    private sealed record TokenResponse([property: JsonPropertyName("access_token")] string AccessToken, [property: JsonPropertyName("scope")] string? Scope = null);
     private sealed record CollectionResponse(Guid Id, string Name);
     private sealed record IngestionResponse([property: JsonPropertyName("operation_id")] Guid OperationId);
 }
 
-public sealed class ProtectedApiFactory(string connectionString, string contentRoot) : WebApplicationFactory<global::Program>
+public sealed class ProtectedApiFactory(string connectionString, string contentRoot, bool enableHistoricalIngestion = false) : WebApplicationFactory<global::Program>
 {
     private readonly RSA _rsa = RSA.Create(2048);
 
@@ -219,6 +292,7 @@ public sealed class ProtectedApiFactory(string connectionString, string contentR
             ["Jwt:CurrentSigningKey:PrivateKeyPem"] = _rsa.ExportRSAPrivateKeyPem(),
             ["Jwt:ValidationKeys:0:KeyId"] = "integration-key",
             ["Jwt:ValidationKeys:0:PublicKeyPem"] = _rsa.ExportRSAPublicKeyPem(),
+            ["HistoricalIngestion:Enabled"] = enableHistoricalIngestion.ToString(),
         }));
         builder.ConfigureServices(services =>
         {
@@ -242,6 +316,152 @@ public sealed class ProtectedApiFactory(string connectionString, string contentR
         if (disposing)
         {
             _rsa.Dispose();
+        }
+    }
+}
+
+public sealed class AdminAppHostHealthTests
+{
+    [Fact]
+    public async Task Liveness_returns_200_while_the_bff_process_runs()
+    {
+        using var factory = new AdminAppHostHealthFactory(new ReachabilityHandler(HttpStatusCode.OK));
+        using var client = factory.CreateClient();
+
+        var response = await client.GetAsync("/health/live");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Readiness_returns_200_when_the_configured_api_is_reachable()
+    {
+        using var factory = new AdminAppHostHealthFactory(new ReachabilityHandler(HttpStatusCode.OK));
+        using var client = factory.CreateClient();
+
+        var response = await client.GetAsync("/health/ready");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.InternalServerError)]
+    [InlineData(HttpStatusCode.ServiceUnavailable)]
+    [InlineData(HttpStatusCode.NotFound)]
+    public async Task Readiness_returns_503_when_the_api_returns_non_success(HttpStatusCode status)
+    {
+        using var factory = new AdminAppHostHealthFactory(new ReachabilityHandler(status));
+        using var client = factory.CreateClient();
+
+        var response = await client.GetAsync("/health/ready");
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Readiness_returns_503_when_the_api_connection_is_refused()
+    {
+        using var factory = new AdminAppHostHealthFactory(new ThrowingHandler(() => new HttpRequestException("connection refused")));
+        using var client = factory.CreateClient();
+
+        var response = await client.GetAsync("/health/ready");
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Readiness_returns_503_when_the_api_times_out()
+    {
+        using var factory = new AdminAppHostHealthFactory(new ThrowingHandler(() => new TaskCanceledException("timeout")));
+        using var client = factory.CreateClient();
+
+        var response = await client.GetAsync("/health/ready");
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Readiness_probe_never_carries_cloudflare_or_admin_identity_headers()
+    {
+        var handler = new RecordingReachabilityHandler(HttpStatusCode.OK);
+        using var factory = new AdminAppHostHealthFactory(handler);
+        using var client = factory.CreateClient();
+
+        var response = await client.GetAsync("/health/ready");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var request = Assert.Single(handler.Requests);
+        Assert.Equal("/api/v1/health/live", request.RequestUri!.AbsolutePath);
+        Assert.False(request.Headers.Contains("Cf-Access-Jwt-Assertion"));
+        Assert.False(request.Headers.Contains(AdminAuthenticationContract.AppIdHeader));
+        Assert.False(request.Headers.Contains(AdminAuthenticationContract.KeyIdHeader));
+        Assert.False(request.Headers.Contains(AdminAuthenticationContract.TimestampHeader));
+        Assert.False(request.Headers.Contains(AdminAuthenticationContract.SignatureHeader));
+        Assert.False(request.Headers.Contains(AdminAuthenticationContract.AssertionHeader));
+    }
+
+    private sealed class AdminAppHostHealthFactory(HttpMessageHandler reachabilityHandler)
+        : WebApplicationFactory<global::Rag.AdminApp.Host.Program>
+    {
+        private readonly RSA _rsa = RSA.Create(2048);
+
+        protected override void ConfigureWebHost(IWebHostBuilder builder)
+        {
+            builder.ConfigureAppConfiguration((_, configuration) => configuration.AddInMemoryCollection(new Dictionary<string, string?>
+            {
+["CloudflareAccess:Issuer"] = "https://team.cloudflareaccess.com",
+["CloudflareAccess:Audience"] = "test-aud",
+["CloudflareAccess:Keys:0:KeyId"] = "cf-key",
+["CloudflareAccess:Keys:0:PublicKeyPem"] = _rsa.ExportRSAPublicKeyPem(),
+["AdminAssertion:Issuer"] = "admin-issuer",
+["AdminAssertion:Audience"] = "admin-audience",
+["AdminAssertion:AppId"] = "admin-app",
+["AdminAssertion:KeyId"] = "assertion-key",
+["AdminAssertion:PrivateKeyPem"] = _rsa.ExportRSAPrivateKeyPem(),
+["AdminAppAuth:Apps:0:AppId"] = "admin-app",
+["AdminAppAuth:Apps:0:KeyId"] = "machine-key",
+["AdminAppAuth:Apps:0:CurrentSecret"] = "machine-secret",
+["AdminApi:BaseUrl"] = "http://api:8080/",
+["AllowedAdminSubjects:0"] = "cf-subject-123",
+            }));
+            builder.ConfigureServices(services =>
+services.AddTransient<global::Rag.AdminApp.Host.AdminApiHealthProbe>(_ =>
+new global::Rag.AdminApp.Host.AdminApiHealthProbe(new HttpClient(reachabilityHandler)
+{
+BaseAddress = new Uri("http://api:8080/"),
+})));
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            base.Dispose(disposing);
+            if (disposing)
+            {
+_rsa.Dispose();
+            }
+        }
+    }
+
+    private sealed class ReachabilityHandler(HttpStatusCode status) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
+            Task.FromResult(new HttpResponseMessage(status));
+    }
+
+    private sealed class ThrowingHandler(Func<Exception> exceptionFactory) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
+            throw exceptionFactory();
+    }
+
+    private sealed class RecordingReachabilityHandler(HttpStatusCode status) : HttpMessageHandler
+    {
+        public List<HttpRequestMessage> Requests { get; } = [];
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            Requests.Add(request);
+            return Task.FromResult(new HttpResponseMessage(status));
         }
     }
 }

@@ -27,6 +27,9 @@ RUN dotnet publish src/Rag.Api/Rag.Api.csproj \
 RUN dotnet publish src/Rag.Operator/Rag.Operator.csproj \
         --configuration Release --no-restore --output /out/operator /p:UseAppHost=false \
         -p:Version="${ASSEMBLY_VERSION}" -p:InformationalVersion="${PUBLICATION_VERSION}"
+RUN dotnet publish src/Rag.AdminApp.Host/Rag.AdminApp.Host.csproj \
+        --configuration Release --no-restore --output /out/admin /p:UseAppHost=false \
+        -p:Version="${ASSEMBLY_VERSION}" -p:InformationalVersion="${PUBLICATION_VERSION}"
 
 FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
 ARG PUBLICATION_VERSION
@@ -52,3 +55,11 @@ FROM runtime AS operator
 COPY --from=build --chown=rag:rag /out/operator/ ./
 USER rag
 ENTRYPOINT ["dotnet", "Rag.Operator.dll"]
+
+FROM runtime AS admin
+COPY --from=build --chown=rag:rag /out/admin/ ./
+USER rag
+ENV ASPNETCORE_URLS=http://+:8080 \
+DOTNET_EnableDiagnostics=0
+EXPOSE 8080
+ENTRYPOINT ["dotnet", "Rag.AdminApp.Host.dll"]

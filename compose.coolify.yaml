@@ -76,6 +76,46 @@ services:
       start_period: 15s
     restart: unless-stopped
 
+  admin:
+    image: >-
+      ghcr.io/jesusjbriceno/rag-adminapp:${RAG_ADMINAPP_IMAGE_REFERENCE:?required}
+    pull_policy: always
+    environment: &admin-environment
+      CloudflareAccess__Issuer: ${CLOUDFLARE_ACCESS__ISSUER:?required}
+      CloudflareAccess__Audience: ${CLOUDFLARE_ACCESS__AUDIENCE:?required}
+      CloudflareAccess__Keys__0__KeyId: >-
+        ${CLOUDFLARE_ACCESS__KEYS__0__KEY_ID:?required}
+      CloudflareAccess__Keys__0__PublicKeyPem: >-
+        ${CLOUDFLARE_ACCESS__KEYS__0__PUBLIC_KEY_PEM:?required}
+      AdminAssertion__Issuer: ${ADMIN_ASSERTION__ISSUER:?required}
+      AdminAssertion__Audience: ${ADMIN_ASSERTION__AUDIENCE:?required}
+      AdminAssertion__AppId: ${ADMIN_ASSERTION__APP_ID:?required}
+      AdminAssertion__KeyId: ${ADMIN_ASSERTION__KEY_ID:?required}
+      AdminAssertion__PrivateKeyPem: >-
+        ${ADMIN_ASSERTION__PRIVATE_KEY_PEM:?required}
+      AdminAppAuth__Apps__0__AppId: ${ADMIN_APP_AUTH__APPS__0__APP_ID:?required}
+      AdminAppAuth__Apps__0__KeyId: ${ADMIN_APP_AUTH__APPS__0__KEY_ID:?required}
+      AdminAppAuth__Apps__0__CurrentSecret: >-
+        ${ADMIN_APP_AUTH__APPS__0__CURRENT_SECRET:?required}
+      AdminAppAuth__Apps__0__PreviousSecret: >-
+        ${ADMIN_APP_AUTH__APPS__0__PREVIOUS_SECRET:-}
+      AdminApi__BaseUrl: ${ADMIN_API__BASE_URL:?required}
+      AllowedAdminSubjects__0: ${ALLOWED_ADMIN_SUBJECTS__0:?required}
+      ADMINAPP_FQDN: ${ADMINAPP_FQDN:?required}
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          curl --fail --silent --show-error http://127.0.0.1:8080/health/ready
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
 volumes:
   postgres-data:
   llama-cpp-model:

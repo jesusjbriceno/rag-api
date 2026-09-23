@@ -6,7 +6,11 @@
     <IsPackable>false</IsPackable>
   </PropertyGroup>
   <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+  <ItemGroup>
     <ProjectReference Include="../../src/Rag.AdminApp/Rag.AdminApp.csproj" />
+    <ProjectReference Include="../../src/Rag.AdminApp.Host/Rag.AdminApp.Host.csproj" />
     <ProjectReference Include="../../src/Rag.Application/Rag.Application.csproj" />
     <ProjectReference Include="../../src/Rag.Domain/Rag.Domain.csproj" />
     <ProjectReference Include="../../src/Rag.Infrastructure/Rag.Infrastructure.csproj" />

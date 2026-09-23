@@ -1,30 +1,32 @@
 schema: spec-driven
 
 context: |
-  Project: rag-api, a public, consumer-agnostic RAG service.
-  Stack baseline: .NET, ASP.NET Core, PostgreSQL with pgvector, Npgsql, EF Core where useful.
-  Architecture baseline: modular monolith with API, Application, Domain, Processing, Embeddings, Persistence, and Content Store boundaries.
-  Processing: hosted background worker for load, parse, normalize, chunk, embed, and index.
-  Style: English technical artifacts; validate proposed architecture before implementation; preserve Deferred decisions.
-  Foundational context: .proposals/*.md.
+  Project: rag-api, a private, consumer-agnostic RAG service.
+  Stack: .NET 10 / ASP.NET Core, PostgreSQL with pgvector, Npgsql, EF Core, OpenAPI, Docker Compose, and hosted background workers.
+  Solution: Rag.sln with API, Application, Domain, Infrastructure, AdminApp, Companion, and Operator projects plus unit and integration test projects.
+  Architecture: modular monolith with API, Application, Domain/Core, Processing, Embeddings, Persistence, and Content Store boundaries.
+  Processing: hosted background worker for ingestion, parsing, normalization, chunking, embedding, and indexing.
+  Validation: restore, Release build, Release tests, Compose validation, shell/Python guard tests, and workflow linting via actionlint; CI also runs OpenCover coverage and SonarQube on develop.
+  Style: English technical artifacts; preserve public, consumer-agnostic repository constraints; preserve deferred decisions and audit trail.
+  Foundational context: .proposals/*.md and README.md.
 
-strict_tdd: false
+strict_tdd: true
 
 testing:
-  runner: unavailable
-  command: ""
-  framework: ""
+  runner: dotnet
+  command: dotnet test Rag.sln --configuration Release
+  framework: xUnit (project-specific test SDKs)
   layers:
-    unit: unavailable
-    integration: unavailable
+    unit: dotnet test tests/Rag.UnitTests/Rag.UnitTests.csproj --configuration Release
+    integration: dotnet test tests/Rag.IntegrationTests/Rag.IntegrationTests.csproj --configuration Release
     e2e: unavailable
   coverage:
-    available: false
-    command: ""
+    available: true
+    command: dotnet test Rag.sln --configuration Release --collect:"XPlat Code Coverage;Format=opencover" --results-directory ./TestResults/coverage
   quality:
-    linter: unavailable
-    type_checker: unavailable
-    formatter: unavailable
+    linter: actionlint .github/workflows/*.yml (CI-installed)
+    type_checker: dotnet build Rag.sln --configuration Release --no-restore
+    formatter: dotnet format Rag.sln --verify-no-changes (availability/configuration to confirm before use)
 
 rules:
   proposal:
@@ -36,11 +38,11 @@ rules:
   tasks:
     - Group tasks by phase and keep each task completable in one session.
   apply:
-    tdd: false
-    test_command: ""
+    tdd: true
+    test_command: dotnet test Rag.sln --configuration Release
   verify:
-    test_command: ""
-    build_command: ""
+    test_command: dotnet test Rag.sln --configuration Release
+    build_command: dotnet build Rag.sln --configuration Release --no-restore
     coverage_threshold: 0
   archive:
     - Preserve the audit trail and warn before destructive spec merges.

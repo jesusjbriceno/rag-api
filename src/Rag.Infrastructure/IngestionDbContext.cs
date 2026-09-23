@@ -29,6 +29,12 @@ public sealed class IngestionDbContext(DbContextOptions<IngestionDbContext> opti
 
     public DbSet<AdminAssertionReplay> AdminAssertionReplays => Set<AdminAssertionReplay>();
 
+    public DbSet<ServiceClientGrantEntity> ServiceClientGrants => Set<ServiceClientGrantEntity>();
+
+    public DbSet<HistoricalUpload> HistoricalUploads => Set<HistoricalUpload>();
+
+    public DbSet<HistoricalProvenance> HistoricalProvenance => Set<HistoricalProvenance>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.HasPostgresExtension("vector");
@@ -104,6 +110,7 @@ public sealed class IngestionDbContext(DbContextOptions<IngestionDbContext> opti
             builder.ToTable("operations");
             builder.HasKey(operation => operation.Id);
             builder.Property(operation => operation.Status).HasConversion<string>().HasMaxLength(20).IsRequired();
+            builder.Property(operation => operation.WorkloadClass).HasConversion<string>().HasMaxLength(20).IsRequired();
             builder.Property(operation => operation.FailureStage).HasMaxLength(100);
             builder.Property(operation => operation.FailureMessage).HasMaxLength(2_000);
             builder.Property(operation => operation.LeaseOwner).HasMaxLength(200);
@@ -114,6 +121,9 @@ public sealed class IngestionDbContext(DbContextOptions<IngestionDbContext> opti
             builder.ToTable(table => table.HasCheckConstraint(
                 "CK_operations_Status_valid",
                 "\"Status\" IN ('Pending', 'Running', 'Succeeded', 'Failed')"));
+            builder.ToTable(table => table.HasCheckConstraint(
+                "CK_operations_WorkloadClass_valid",
+                "\"WorkloadClass\" IN ('RealTime', 'Historical')"));
             builder.ToTable(table => table.HasCheckConstraint(
                 "CK_operations_Lease_valid",
                 "(\"Status\" = 'Running' AND \"LeaseOwner\" IS NOT NULL AND \"LeaseExpiresAt\" IS NOT NULL) OR (\"Status\" IN ('Pending', 'Succeeded', 'Failed') AND \"LeaseOwner\" IS NULL AND \"LeaseExpiresAt\" IS NULL)"));
@@ -201,9 +211,93 @@ public sealed class IngestionDbContext(DbContextOptions<IngestionDbContext> opti
                 .OnDelete(DeleteBehavior.Cascade);
         });
 
-        modelBuilder.Entity<AdminAuditEvent>(builder =>
-        {
-            builder.ToTable("admin_audit_events");
+            modelBuilder.Entity<ServiceClientGrantEntity>(builder =>
+            {
+                builder.ToTable("service_client_grants");
+                builder.HasKey(grant => grant.Id);
+                builder.Property(grant => grant.Scopes).HasMaxLength(500).IsRequired();
+                builder.Property(grant => grant.Version).IsConcurrencyToken().IsRequired();
+                builder.Property(grant => grant.CreatedAt).IsRequired();
+                builder.HasIndex(grant => grant.ServiceClientId).IsUnique();
+                builder.ToTable(table => table.HasCheckConstraint(
+                    "CK_service_client_grants_version_positive",
+                    "\"Version\" > 0"));
+                builder.HasOne<ServiceClient>()
+                    .WithMany()
+                    .HasForeignKey(grant => grant.ServiceClientId)
+                    .OnDelete(DeleteBehavior.Cascade);
+                builder.HasOne<Collection>()
+                    .WithMany()
+                    .HasForeignKey(grant => grant.CollectionId)
+                    .OnDelete(DeleteBehavior.Restrict);
+            });
+
+                modelBuilder.Entity<HistoricalUpload>(builder =>
+                {
+                    builder.ToTable("historical_uploads");
+                    builder.HasKey(upload => upload.Id);
+                    builder.Property(upload => upload.SourceDocumentKey).HasMaxLength(512).IsRequired();
+                    builder.Property(upload => upload.IdempotencyKey).HasMaxLength(200).IsRequired();
+                    builder.Property(upload => upload.Fingerprint).HasMaxLength(64).IsRequired();
+                    builder.Property(upload => upload.NormalizedTextSha256).HasMaxLength(64).IsRequired();
+                    builder.Property(upload => upload.DeclaredBytes).IsRequired();
+                    builder.Property(upload => upload.CorrelationId).HasMaxLength(64).IsRequired();
+                    builder.Property(upload => upload.DisplayName).HasMaxLength(255);
+                    builder.Property(upload => upload.Format).HasMaxLength(20);
+                    builder.Property(upload => upload.SourceRootAlias).HasMaxLength(200);
+                    builder.Property(upload => upload.State).HasConversion<string>().HasMaxLength(20).IsRequired();
+                    builder.Property(upload => upload.ContentReference).HasMaxLength(300);
+                    builder.Property(upload => upload.CreatedAt).IsRequired();
+                    builder.HasIndex(upload => new { upload.ServiceClientId, upload.IdempotencyKey }).IsUnique();
+                    builder.HasIndex(upload => new { upload.State, upload.CreatedAt });
+                    builder.ToTable(table => table.HasCheckConstraint(
+                        "CK_historical_uploads_DeclaredBytes_positive",
+                        "\"DeclaredBytes\" > 0"));
+                    builder.ToTable(table => table.HasCheckConstraint(
+                        "CK_historical_uploads_NormalizedTextSha256_hex",
+                        "\"NormalizedTextSha256\" ~ '^[0-9a-f]{64}$'"));
+                    builder.ToTable(table => table.HasCheckConstraint(
+                        "CK_historical_uploads_State_valid",
+                        "\"State\" IN ('Reserved', 'Published', 'Committed', 'Abandoned')"));
+                    builder.HasOne<ServiceClient>()
+                        .WithMany()
+                        .HasForeignKey(upload => upload.ServiceClientId)
+                        .OnDelete(DeleteBehavior.Restrict);
+                    builder.HasOne<Collection>()
+                        .WithMany()
+                        .HasForeignKey(upload => upload.CollectionId)
+                        .OnDelete(DeleteBehavior.Restrict);
+                });
+
+                modelBuilder.Entity<HistoricalProvenance>(builder =>
+                {
+                    builder.ToTable("historical_provenance");
+                    builder.HasKey(provenance => provenance.Id);
+                    builder.Property(provenance => provenance.SourceKind).HasMaxLength(50).IsRequired();
+                    builder.Property(provenance => provenance.SourceDocumentKey).HasMaxLength(512).IsRequired();
+                    builder.Property(provenance => provenance.NormalizedTextSha256).HasMaxLength(64).IsRequired();
+                    builder.Property(provenance => provenance.DeclaredBytes).IsRequired();
+                    builder.Property(provenance => provenance.RemoteOperationId).IsRequired();
+                    builder.Property(provenance => provenance.IngestedAt).IsRequired();
+                    builder.Property(provenance => provenance.SourceRootAlias).HasMaxLength(200);
+                    builder.Property(provenance => provenance.DisplayFileName).HasMaxLength(255);
+                    builder.Property(provenance => provenance.Format).HasMaxLength(20);
+                    builder.HasIndex(provenance => provenance.DocumentVersionId).IsUnique();
+                    builder.ToTable(table => table.HasCheckConstraint(
+                        "CK_historical_provenance_DeclaredBytes_positive",
+                        "\"DeclaredBytes\" > 0"));
+                    builder.ToTable(table => table.HasCheckConstraint(
+                        "CK_historical_provenance_NormalizedTextSha256_hex",
+                        "\"NormalizedTextSha256\" ~ '^[0-9a-f]{64}$'"));
+                    builder.HasOne<DocumentVersion>()
+                        .WithMany()
+                        .HasForeignKey(provenance => provenance.DocumentVersionId)
+                        .OnDelete(DeleteBehavior.Cascade);
+                });
+
+                modelBuilder.Entity<AdminAuditEvent>(builder =>
+                {
+                builder.ToTable("admin_audit_events");
             builder.HasKey(auditEvent => auditEvent.Id);
             builder.Property(auditEvent => auditEvent.ActorSubject).HasMaxLength(200).IsRequired();
             builder.Property(auditEvent => auditEvent.AppId).HasMaxLength(100).IsRequired();
@@ -245,4 +339,19 @@ public sealed class IngestionDbContext(DbContextOptions<IngestionDbContext> opti
             builder.HasIndex(replay => replay.ExpiresAt);
         });
     }
+}
+
+public sealed class ServiceClientGrantEntity
+{
+    public Guid Id { get; set; }
+
+    public Guid ServiceClientId { get; set; }
+
+    public string Scopes { get; set; } = string.Empty;
+
+    public Guid? CollectionId { get; set; }
+
+    public int Version { get; set; }
+
+    public DateTimeOffset CreatedAt { get; set; }
 }

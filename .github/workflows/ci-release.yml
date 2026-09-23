@@ -73,6 +73,16 @@ jobs:
             image: ghcr.io/jesusjbriceno/rag-operator
             architecture: arm64
             runner: ubuntu-24.04-arm
+          - component: admin
+            target: admin
+            image: ghcr.io/jesusjbriceno/rag-adminapp
+            architecture: amd64
+            runner: ubuntu-latest
+          - component: admin
+            target: admin
+            image: ghcr.io/jesusjbriceno/rag-adminapp
+            architecture: arm64
+            runner: ubuntu-24.04-arm
     steps:
       - name: Checkout
         uses: actions/checkout@eef61447b9ff4aafe5dcd4e0bbf5d482be7e7871 # v4.2.1
@@ -363,6 +373,8 @@ jobs:
             image: ghcr.io/jesusjbriceno/rag-api
           - component: operator
             image: ghcr.io/jesusjbriceno/rag-operator
+          - component: admin
+            image: ghcr.io/jesusjbriceno/rag-adminapp
     steps:
       - name: Checkout
         uses: actions/checkout@eef61447b9ff4aafe5dcd4e0bbf5d482be7e7871 # v4.2.1
@@ -529,6 +541,7 @@ jobs:
 
           prune_staging "rag-api"
           prune_staging "rag-operator"
+          prune_staging "rag-adminapp"
 
   # --- Companion release gates ---
   # The companion is a win-x64 self-contained CLI. Before any tag asset is

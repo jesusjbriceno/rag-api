@@ -110,6 +110,10 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddSingleton<ICredentialGenerator, CredentialGenerator>();
         services.AddSingleton<ICredentialSecretHasher, Argon2idCredentialSecretHasher>();
         services.AddSingleton<IAccessTokenIssuer, JwtAccessTokenIssuer>();
+        services.AddOptions<HistoricalIngestionOptions>()
+            .Bind(configuration.GetSection(HistoricalIngestionOptions.SectionName));
+        services.AddSingleton(serviceProvider =>
+            serviceProvider.GetRequiredService<IOptions<HistoricalIngestionOptions>>().Value);
         services.AddHttpClient<IEmbeddingProvider, LlamaCppEmbeddingProvider>((serviceProvider, client) =>
         {
             var llamaCpp = serviceProvider.GetRequiredService<IOptions<LlamaCppOptions>>().Value;
