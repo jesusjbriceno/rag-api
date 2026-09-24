@@ -38,7 +38,9 @@ public static class HistoricalUploadEndpoints
                 StatusCodes.Status429TooManyRequests,
                 "Too many requests. The per-client pending-upload quota or the total storage watermark was exceeded; " +
                 "the handler answers application/problem+json with Retry-After: 30. The route is also rate limited, and " +
-                "the limiter answers 429 with a Retry-After header.")
+                "the limiter answers 429 with no response body.",
+                retryAfterDescription: "Seconds to wait before retrying; the quota and watermark paths set " +
+                    "Retry-After: 30 on the problem response.")
             .RequireAuthorization(HistoricalAuthorizationPolicies.UploadsWrite)
             .RequireRateLimiting(HistoricalRateLimitPolicies.Uploads);
 
@@ -71,7 +73,8 @@ public static class HistoricalUploadEndpoints
             .DeclaresProblem(
                 StatusCodes.Status429TooManyRequests,
                 "Too many requests. Publishing would cross the total storage watermark; the handler answers " +
-                "application/problem+json with Retry-After: 30.")
+                "application/problem+json with Retry-After: 30.",
+                retryAfterDescription: "Seconds to wait before retrying; the watermark path sets it to 30 on the problem response.")
             .RequireAuthorization(HistoricalAuthorizationPolicies.UploadsWrite);
 
         endpoints.MapPost(

@@ -56,6 +56,12 @@ public sealed class OpenApiContractTests(OpenApiGenerationFactory generation) : 
 
     private static readonly string[] AnonymousPaths = ["/api/v1/health", "/api/v1/auth/token"];
 
+    /// <summary>
+    /// The one anonymous operation whose handler authenticates the credential itself and therefore answers an
+    /// <c>application/problem+json</c> 401, unlike the health probes that only the anonymous middleware skips.
+    /// </summary>
+    private const string AnonymousTokenPath = "/api/v1/auth/token";
+
     private JsonNode Document => generation.Document;
 
     [Fact]
@@ -168,19 +174,47 @@ public sealed class OpenApiContractTests(OpenApiGenerationFactory generation) : 
     }
 
     [Fact]
-    public void Authenticated_operations_declare_the_401_and_403_problem_responses()
+    public void Authentication_responses_match_the_plane_that_produces_them()
     {
-        var authenticated = Operations(Document)
-            .Where(entry => SecuritySchemeNames(entry.Operation).Count > 0)
-            .ToArray();
+        const string adminPath = "/api/v1/admin/";
+        var checkedOperations = 0;
 
-        Assert.NotEmpty(authenticated);
-        foreach (var (path, method, operation) in authenticated)
+        foreach (var (path, method, operation) in Operations(Document))
         {
-            var responses = operation["responses"]?.AsObject();
-            Assert.True(responses?.ContainsKey("401") == true, $"{method.ToUpperInvariant()} {path} must declare a 401 response.");
-            Assert.True(responses?.ContainsKey("403") == true, $"{method.ToUpperInvariant()} {path} must declare a 403 response.");
+            var responses = Responses(operation);
+            if (SecuritySchemeNames(operation).Count == 0)
+            {
+                Assert.False(responses.ContainsKey("403"), $"{method.ToUpperInvariant()} {path} is anonymous and must not declare a 403.");
+                if (path == AnonymousTokenPath)
+                {
+                    // The authentication middleware never runs here; this is the handler's own 401 and it is a problem body.
+                    AssertProblemJsonResponse(operation, "401", method, path);
+                }
+                else
+                {
+                    Assert.False(responses.ContainsKey("401"), $"{method.ToUpperInvariant()} {path} is anonymous and must not declare a 401.");
+                }
+
+                checkedOperations++;
+                continue;
+            }
+
+            AssertProblemJsonResponse(operation, "401", method, path);
+            if (path.StartsWith(adminPath, StringComparison.Ordinal))
+            {
+                Assert.False(
+                    responses.ContainsKey("403"),
+                    $"{method.ToUpperInvariant()} {path} is an admin operation and has no reachable 403.");
+            }
+            else
+            {
+                AssertProblemJsonResponse(operation, "403", method, path);
+            }
+
+            checkedOperations++;
         }
+
+        Assert.Equal(20, checkedOperations);
     }
 
     [Fact]
@@ -286,15 +320,15 @@ public sealed class OpenApiContractTests(OpenApiGenerationFactory generation) : 
     [InlineData("post", "/api/v1/collections/{collectionId}/ingestions:txt", "200,202,400,401,403,404,413,415,500")]
     [InlineData("get", "/api/v1/collections/{collectionId}/operations/{operationId}", "200,401,403,404,500")]
     [InlineData("post", "/api/v1/retrieval:search", "200,400,401,403,404,415,422,500")]
-    [InlineData("post", "/api/v1/admin/clients", "200,201,400,401,403,409,415,500")]
-    [InlineData("get", "/api/v1/admin/clients", "200,400,401,403,500")]
-    [InlineData("get", "/api/v1/admin/clients/{clientId}", "200,401,403,404,500")]
-    [InlineData("post", "/api/v1/admin/clients/{clientId}/credentials", "201,400,401,403,404,409,415,500")]
-    [InlineData("get", "/api/v1/admin/clients/{clientId}/credentials", "200,401,403,404,500")]
-    [InlineData("get", "/api/v1/admin/credentials/{credentialId}", "200,401,403,404,500")]
-    [InlineData("post", "/api/v1/admin/credentials/{credentialId}/rotate", "200,400,401,403,404,409,500")]
-    [InlineData("post", "/api/v1/admin/credentials/{credentialId}/revoke", "200,400,401,403,404,409,500")]
-    [InlineData("get", "/api/v1/admin/audit", "200,400,401,403,500")]
+    [InlineData("post", "/api/v1/admin/clients", "200,201,400,401,409,415,500")]
+    [InlineData("get", "/api/v1/admin/clients", "200,400,401,500")]
+    [InlineData("get", "/api/v1/admin/clients/{clientId}", "200,401,404,500")]
+    [InlineData("post", "/api/v1/admin/clients/{clientId}/credentials", "201,400,401,404,409,415,500")]
+    [InlineData("get", "/api/v1/admin/clients/{clientId}/credentials", "200,401,404,500")]
+    [InlineData("get", "/api/v1/admin/credentials/{credentialId}", "200,401,404,500")]
+    [InlineData("post", "/api/v1/admin/credentials/{credentialId}/rotate", "200,400,401,404,409,500")]
+    [InlineData("post", "/api/v1/admin/credentials/{credentialId}/revoke", "200,400,401,404,409,500")]
+    [InlineData("get", "/api/v1/admin/audit", "200,400,401,500")]
     [InlineData("post", "/api/v1/historical/collections/{collectionId}/uploads", "200,201,400,401,403,404,409,413,415,429,500")]
     [InlineData("put", "/api/v1/historical/uploads/{uploadId}/content", "200,400,401,403,404,409,413,415,429,500")]
     [InlineData("post", "/api/v1/historical/uploads/{uploadId}:commit", "200,401,403,404,409,500")]
@@ -331,17 +365,32 @@ public sealed class OpenApiContractTests(OpenApiGenerationFactory generation) : 
         }
     }
 
-    [Fact]
-    public void Framework_bound_token_exchange_declares_bodyless_400_and_415()
+    [Theory]
+    [InlineData("post", "/api/v1/auth/token", "400")]
+    [InlineData("post", "/api/v1/historical/collections/{collectionId}/uploads", "429")]
+    public void Dual_shape_statuses_describe_the_problem_and_the_bodyless_branch(string method, string path, string code)
     {
-        var operation = OperationFor(Document, "/api/v1/auth/token", "post");
+        var operation = OperationFor(Document, path, method);
         Assert.NotNull(operation);
-        var responses = Responses(operation!);
-        foreach (var code in new[] { "400", "415" })
-        {
-            Assert.True(responses.ContainsKey(code), $"exchange_token must declare {code}.");
-            Assert.Null(responses[code]?["content"]);
-        }
+
+        AssertProblemJsonResponse(operation!, code, method, path);
+        var description = Responses(operation!)[code]?["description"]?.GetValue<string>() ?? string.Empty;
+        Assert.Contains("no response body", description, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Retry_after_is_declared_on_exactly_the_operations_that_can_return_it()
+    {
+        var carrying = Operations(Document)
+            .Where(entry => Responses(entry.Operation).Any(response =>
+                response.Value?["headers"]?.AsObject()?.ContainsKey("Retry-After") == true))
+            .Select(entry => entry.Operation["operationId"]!.GetValue<string>())
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+
+        Assert.Equal(
+            ["publish_historical_upload_content", "reserve_historical_upload"],
+            carrying);
     }
 
     [Theory]
@@ -468,6 +517,16 @@ public sealed class OpenApiContractTests(OpenApiGenerationFactory generation) : 
     private static bool IsOperation(string key) => !NonOperationPathItemKeys.Contains(key, StringComparer.Ordinal);
 
     private static JsonObject Responses(JsonNode operation) => operation["responses"]?.AsObject() ?? new JsonObject();
+
+    private static void AssertProblemJsonResponse(JsonNode operation, string code, string method, string path)
+    {
+        var response = Responses(operation)[code];
+        Assert.True(response is not null, $"{method.ToUpperInvariant()} {path} must declare a {code} response.");
+        var content = response!["content"]?.AsObject();
+        Assert.True(
+            content?.ContainsKey("application/problem+json") == true,
+            $"{method.ToUpperInvariant()} {path} {code} must declare an application/problem+json body.");
+    }
 
     private static IReadOnlyList<JsonNode> Parameters(JsonNode operation) =>
         operation["parameters"]?.AsArray()?.Select(parameter => parameter!).ToArray() ?? [];

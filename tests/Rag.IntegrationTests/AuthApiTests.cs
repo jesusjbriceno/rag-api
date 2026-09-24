@@ -48,6 +48,8 @@ public sealed class AuthApiTests : IClassFixture<AuthApiFactory>
         Assert.Equal(HttpStatusCode.Unauthorized, fourth.StatusCode);
         Assert.Equal(HttpStatusCode.Unauthorized, fifth.StatusCode);
         Assert.Equal(HttpStatusCode.TooManyRequests, rateLimited.StatusCode);
+        Assert.False(rateLimited.Headers.Contains("Retry-After"));
+        Assert.Equal(string.Empty, await rateLimited.Content.ReadAsStringAsync());
         Assert.Equal(await malformed.Content.ReadAsStringAsync(), await missingSecret.Content.ReadAsStringAsync());
     }
 

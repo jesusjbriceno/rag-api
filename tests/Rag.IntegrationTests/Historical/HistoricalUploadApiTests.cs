@@ -254,7 +254,11 @@ public sealed class HistoricalUploadApiTests(PostgreSqlFixture fixture) : IAsync
 
         var third = await _clientReserve(client, token, historical.CollectionId, "q-3", "content-3", "k-3");
         Assert.Equal(HttpStatusCode.TooManyRequests, third.StatusCode);
-        Assert.True(third.Headers.TryGetValues("Retry-After", out _));
+        Assert.True(third.Headers.TryGetValues("Retry-After", out var retryAfter));
+        Assert.Equal("30", Assert.Single(retryAfter!));
+        Assert.Equal("application/problem+json", third.Content.Headers.ContentType?.MediaType);
+        using var problem = JsonDocument.Parse(await third.Content.ReadAsStringAsync());
+        Assert.Equal("Too many requests", problem.RootElement.GetProperty("title").GetString());
     }
 
     [Fact]

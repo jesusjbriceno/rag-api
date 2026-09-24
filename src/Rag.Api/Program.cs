@@ -165,10 +165,9 @@ app.MapPost("/api/v1/auth/token", async (TokenExchangeRequest request, Credentia
     .Produces<TokenResponse>(StatusCodes.Status200OK)
     .DeclaresProblem(
         StatusCodes.Status400BadRequest,
-        "Bad request. The framework binds the request body, so a malformed payload is rejected before the handler " +
-        "runs with no response body; an unknown scope is answered by the handler as application/problem+json titled " +
-        "\"invalid_scope\".",
-        hasBody: false)
+        "Bad request. The handler answers application/problem+json titled \"invalid_scope\" when the requested " +
+        "scope is unknown; the framework's bodyless rejection of a malformed or oversized request body uses the " +
+        "same status with no response body.")
     .DeclaresProblem(
         StatusCodes.Status401Unauthorized,
         "Unauthorized. The credential key id is unknown or the secret does not match; the handler answers " +
@@ -181,7 +180,7 @@ app.MapPost("/api/v1/auth/token", async (TokenExchangeRequest request, Credentia
     .DeclaresProblem(
         StatusCodes.Status429TooManyRequests,
         "Too many requests. The credential exchange is limited to five requests per minute per caller; the rate " +
-        "limiter answers 429 with a Retry-After header and no response body.",
+        "limiter answers 429 with no response body.",
         hasBody: false)
     .AllowAnonymous()
     .RequireRateLimiting("credential-exchange");

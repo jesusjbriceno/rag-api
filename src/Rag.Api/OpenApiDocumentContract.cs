@@ -93,7 +93,7 @@ public static class OpenApiDocumentContract
     /// A non-success response the handler can produce, for the generated document only. It carries the description
     /// the operation transformer attaches to the response the matching <c>Produces</c> call already created.
     /// </summary>
-    internal sealed record ProblemResponseMetadata(int StatusCode, string Description);
+    internal sealed record ProblemResponseMetadata(int StatusCode, string Description, string? RetryAfterDescription = null);
 
     /// <summary>
     /// Declares a non-success response for the generated document only. A response with a body is the handler's own
@@ -105,7 +105,8 @@ public static class OpenApiDocumentContract
         this RouteHandlerBuilder builder,
         int statusCode,
         string description,
-        bool hasBody = true)
+        bool hasBody = true,
+        string? retryAfterDescription = null)
     {
         if (hasBody)
         {
@@ -116,7 +117,7 @@ public static class OpenApiDocumentContract
             builder.Produces(statusCode);
         }
 
-        builder.WithMetadata(new ProblemResponseMetadata(statusCode, description));
+        builder.WithMetadata(new ProblemResponseMetadata(statusCode, description, retryAfterDescription));
         return builder;
     }
 
@@ -216,7 +217,7 @@ public static class OpenApiDocumentContract
                 break;
         }
 
-        EnsureAuthenticationResponses(operation);
+        DeclareAuthenticationResponses(operation, context.Document, policy);
         return Task.CompletedTask;
     }
 
@@ -231,6 +232,15 @@ public static class OpenApiDocumentContract
                 response is OpenApiResponse concrete)
             {
                 concrete.Description = admin ? problem.Description + adminNote : problem.Description;
+                if (problem.RetryAfterDescription is { } retryAfterDescription)
+                {
+                    concrete.Headers ??= new Dictionary<string, IOpenApiHeader>(StringComparer.Ordinal);
+                    concrete.Headers["Retry-After"] = new OpenApiHeader
+                    {
+                        Description = retryAfterDescription,
+                        Schema = new OpenApiSchema { Type = JsonSchemaType.Integer },
+                    };
+                }
             }
         }
     }
@@ -309,16 +319,36 @@ public static class OpenApiDocumentContract
         return requirement;
     }
 
-    private static void EnsureAuthenticationResponses(OpenApiOperation operation)
+    /// <summary>
+    /// Declares the authentication failures each plane can actually produce. The public and historical bearer planes
+    /// answer both 401 and 403 with an <c>application/problem+json</c> body through the JWT bearer events. The admin
+    /// plane only challenges with 401 and carries this plane's problem extensions; it has no reachable 403.
+    /// </summary>
+    private static void DeclareAuthenticationResponses(OpenApiOperation operation, OpenApiDocument? document, string? policy)
     {
         operation.Responses ??= new OpenApiResponses();
+        var admin = policy == AdminPolicy;
+
         operation.Responses.TryAdd("401", new OpenApiResponse
         {
-            Description = "Missing or invalid credentials.",
+            Description = admin
+                ? "Unauthorized. Missing or invalid admin credentials; the admin plane answers " +
+                  "application/problem+json with the code extension and, when present, traceId."
+                : "Unauthorized. The request is missing a valid bearer JWT; the middleware answers " +
+                  "application/problem+json titled \"Unauthorized\".",
+            Content = ProblemContent(document),
         });
+
+        if (admin)
+        {
+            return;
+        }
+
         operation.Responses.TryAdd("403", new OpenApiResponse
         {
-            Description = "Credentials are valid but lack the required policy or scope.",
+            Description = "Forbidden. The caller is authenticated but lacks the required policy or scope; " +
+                          "the middleware answers application/problem+json titled \"Forbidden\".",
+            Content = ProblemContent(document),
         });
     }
 
