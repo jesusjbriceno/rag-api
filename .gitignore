@@ -15,5 +15,11 @@ obj/
 content/
 backups/
 
-# Local Pi runtime state
+# Local tool state and build/test output
 .atl/
+.engram/
+.pi/
+TestResults/
+__pycache__/
+.ruff_cache/
+.vs/
