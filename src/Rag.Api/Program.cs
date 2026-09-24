@@ -16,8 +16,12 @@ using Rag.Infrastructure;
 
 var builder = WebApplication.CreateBuilder(args);
 
+builder.Services.AddOpenApi();
+
+var openApiGeneration = builder.Environment.IsEnvironment(ApiEndpointSupport.OpenApiGenerationEnvironment);
+
 builder.Services.AddApplication();
-builder.Services.AddInfrastructure(builder.Configuration);
+builder.Services.AddInfrastructure(builder.Configuration, openApiGeneration);
 builder.Services.AddHistoricalIngestion();
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddJwtBearer(options =>
@@ -305,6 +309,10 @@ public sealed record RetrievalSearchRequest(
 public static class ApiEndpointSupport
 {
     public const int MaxIngestionBodyBytes = 1_048_576;
+
+    // Build-time document generation ("GetDocument.Insider") starts this host; this environment keeps the
+    // generation pass free of PostgreSQL and of production secrets. See src/Rag.Api/Rag.Api.csproj.
+    public const string OpenApiGenerationEnvironment = "OpenApiGeneration";
 
     public static IResult InvalidInput() => Results.Problem(statusCode: StatusCodes.Status400BadRequest, title: "Invalid input");
 
