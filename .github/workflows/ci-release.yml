@@ -532,9 +532,9 @@ jobs:
 
   # --- Companion release gates ---
   # The companion is a win-x64 self-contained CLI. Before any tag asset is
-  # attached, the workflow proves: PR-equivalent Windows checks, the pinned
-  # LibreOffice version, the live BFF companion contract, a clean-machine
-  # 5-format smoke, and executable/ZIP/SHA-256 integrity with an SBOM and notices.
+  # attached, the workflow proves: PR-equivalent Windows checks, the live BFF
+  # companion contract, a clean-machine 4-format smoke, and
+  # executable/ZIP/SHA-256 integrity with an SBOM and notices.
 
   companion:
     name: Build companion (win-x64)
@@ -556,27 +556,6 @@ jobs:
         with:
           global-json-file: global.json
 
-      # Pinned LibreOffice 26.8 x64. Re-verify the URL and add a SHA-256
-      # checksum before merge.
-      - name: Provision LibreOffice 26.8 x64
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $url = 'https://download.documentfoundation.org/libreoffice/stable/26.8.0/win/x86_64/LibreOffice_26.8.0_Win_x86-64.msi'
-          $msi = Join-Path $env:RUNNER_TEMP 'LibreOffice_26.8.0.msi'
-          Invoke-WebRequest -Uri $url -OutFile $msi
-          Start-Process msiexec.exe -ArgumentList @('/i', $msi, '/qn', '/norestart') -Wait
-
-      - name: Verify LibreOffice version
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $soffice = 'C:\Program Files\LibreOffice\program\soffice.com'
-          if (-not (Test-Path $soffice)) { throw "soffice.com not found at $soffice" }
-          $version = & $soffice --version
-          Write-Host "LibreOffice version: $version"
-          if ($version -notmatch '26\.8') { throw "Expected LibreOffice 26.8 x64, got: $version" }
-
       - name: Test companion
         run: dotnet test tests/Rag.Companion.Tests/Rag.Companion.Tests.csproj --configuration Release
 
@@ -594,7 +573,6 @@ jobs:
 
           DocumentFormat.OpenXml 3.5.1 - MIT - https://github.com/dotnet/Open-XML-SDK
           PdfPig 0.1.16 - Apache-2.0 - https://github.com/UglyToad/PdfPig
-          LibreOffice 26.8 x64 - MPL-2.0 - https://www.libreoffice.org/about-us/licenses/
           .NET 10 - MIT - https://dot.net
           "@
           Set-Content -Path "$env:RUNNER_TEMP\publish\THIRD-PARTY-NOTICES.txt" -Value $notices -Encoding UTF8
@@ -650,7 +628,7 @@ jobs:
         run: bash scripts/companion-bff-smoke.sh
 
   companion-format-smoke:
-    name: Clean-machine 5-format smoke
+    name: Clean-machine 4-format smoke
     needs:
       - companion
     runs-on: windows-latest
@@ -672,27 +650,16 @@ jobs:
           persist-credentials: false
           ref: ${{ github.sha }}
 
-      - name: Provision LibreOffice 26.8 x64
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $url = 'https://download.documentfoundation.org/libreoffice/stable/26.8.0/win/x86_64/LibreOffice_26.8.0_Win_x86-64.msi'
-          $msi = Join-Path $env:RUNNER_TEMP 'LibreOffice_26.8.0.msi'
-          Invoke-WebRequest -Uri $url -OutFile $msi
-          Start-Process msiexec.exe -ArgumentList @('/i', $msi, '/qn', '/norestart') -Wait
-
       - name: Download companion package
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: rag-companion-win-x64
           path: ${{ runner.temp }}/companion
 
-      - name: Run 5-format smoke (txt, md, docx, pdf, doc)
+      - name: Run 4-format smoke (txt, md, docx, pdf)
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $soffice = 'C:\Program Files\LibreOffice\program\soffice.com'
-          if (-not (Test-Path $soffice)) { throw "soffice.com not found at $soffice" }
           $companionDir = "$env:RUNNER_TEMP\companion"
           Expand-Archive -Path "$companionDir\Rag.Companion-win-x64.zip" -DestinationPath "$companionDir\bin"
           $smokeDir = "$env:RUNNER_TEMP\smoke"
@@ -701,9 +668,6 @@ jobs:
           Copy-Item tests/fixtures/import/sample.md $smokeDir
           Copy-Item tests/fixtures/import/sample.docx $smokeDir
           Copy-Item tests/fixtures/import/sample.pdf $smokeDir
-          # Generate a real Word 97-2003 .doc from the DOCX fixture with pinned LibreOffice.
-          & $soffice --headless --convert-to doc --outdir $smokeDir tests/fixtures/import/sample.docx
-          if (-not (Test-Path "$smokeDir\sample.doc")) { throw 'LibreOffice failed to generate sample.doc.' }
           $config = @{
             apiBaseUrl = $env:COMPANION_API_BASE_URL
             companionBaseUrl = $env:COMPANION_BFF_URL
@@ -713,16 +677,15 @@ jobs:
             serviceClientKeyId = $env:COMPANION_SERVICE_CLIENT_KEY_ID
             serviceClientSecret = $env:COMPANION_SERVICE_CLIENT_SECRET
             roots = @($smokeDir)
-            libreOfficePath = $soffice
             failureLogPath = "$env:RUNNER_TEMP\smoke-failures.jsonl"
           }
           $config | ConvertTo-Json | Set-Content -Path "$env:RUNNER_TEMP\smoke.json" -Encoding UTF8
           & "$companionDir\bin\Rag.Companion.exe" run --config "$env:RUNNER_TEMP\smoke.json"
           if ($LASTEXITCODE -ne 0) {
             Get-Content "$env:RUNNER_TEMP\smoke-failures.jsonl" -ErrorAction SilentlyContinue
-            throw "5-format smoke failed with exit code $LASTEXITCODE"
+            throw "4-format smoke failed with exit code $LASTEXITCODE"
           }
-          Write-Host '5-format smoke passed: txt, md, docx, pdf, doc all extracted and ingested.'
+          Write-Host '4-format smoke passed: txt, md, docx, pdf all extracted and ingested.'
 
   release:
     name: Create GitHub Release

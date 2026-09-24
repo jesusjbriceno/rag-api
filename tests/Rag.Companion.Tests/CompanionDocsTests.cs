@@ -11,7 +11,6 @@ public sealed class CompanionDocsTests
     {
         var doc = File.ReadAllText(DocsPath());
 
-        Assert.Contains("LibreOffice", doc);
         Assert.Contains("DocumentFormat.OpenXml", doc);
         Assert.Contains("PdfPig", doc);
         Assert.Contains("## Install", doc);

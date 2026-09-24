@@ -50,9 +50,6 @@ public sealed record CompanionConfig
     /// <summary>Administrator-selected local root directories; the snapshot is confined to these.</summary>
     public IReadOnlyList<string> Roots { get; init; } = [];
 
-    /// <summary>Absolute path to the pinned LibreOffice <c>soffice.com</c> (26.8 x64) for legacy DOC conversion.</summary>
-    public string LibreOfficePath { get; init; } = "soffice.com";
-
     /// <summary>Path of the local structured log that records final per-file failures.</summary>
     public string FailureLogPath { get; init; } = "companion-failures.jsonl";
 

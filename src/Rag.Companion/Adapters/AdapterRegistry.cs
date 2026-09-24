@@ -1,6 +1,5 @@
 using System.Text;
 using System.Text.Json;
-using Rag.Companion.LibreOffice;
 
 namespace Rag.Companion.Adapters;
 
@@ -27,16 +26,14 @@ public sealed class AdapterRegistry
         _adapters = new Dictionary<string, ITextAdapter>(adapters, StringComparer.OrdinalIgnoreCase);
     }
 
-    public static AdapterRegistry CreateDefault(LibreOfficeRunner runner)
+    public static AdapterRegistry CreateDefault()
     {
-        ArgumentNullException.ThrowIfNull(runner);
         return new AdapterRegistry(new Dictionary<string, ITextAdapter>(StringComparer.OrdinalIgnoreCase)
         {
             [".txt"] = new TxtAdapter(),
             [".md"] = new MarkdownAdapter(),
             [".docx"] = new DocxAdapter(),
             [".pdf"] = new PdfAdapter(),
-            [".doc"] = new DocAdapter(runner),
         });
     }
 

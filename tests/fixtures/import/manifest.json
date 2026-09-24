@@ -32,7 +32,7 @@
     {
       "name": "sample.doc",
       "format": "doc",
-      "origin": "Structural OLE Compound File header (Word 97-2003 magic); exercises the DOC boundary check. It is not a fully extractable Word document; full DOC extraction is validated by the Windows CI smoke against LibreOffice.",
+      "origin": "Structural OLE Compound File header (Word 97-2003 magic); exercises the DOC boundary check. It is not a fully extractable Word document: legacy .doc is deliberately unsupported, so the loader reports doc_libreoffice_required and CandidateClassifier classifies .doc as unsupported_format.",
       "license": "CC0-1.0",
       "sha256": "e189c31c0681eeddcbe1d8828ebc32acb7f06933c848f8fc983b7c3d1739872e"
     }
