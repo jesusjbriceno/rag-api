@@ -1,7 +1,6 @@
 using System.Net.Http;
 using Rag.Companion.Adapters;
 using Rag.Companion.Ingestion;
-using Rag.Companion.LibreOffice;
 using Rag.Companion.Protocol;
 
 namespace Rag.Companion.Host;
@@ -66,7 +65,7 @@ public static class CommandLine
             config.ServiceClientKeyId,
             config.ServiceClientSecret,
             clock);
-        var registry = AdapterRegistry.CreateDefault(new LibreOfficeRunner(config.LibreOfficePath));
+        var registry = AdapterRegistry.CreateDefault();
         return new CompanionRun(config, companion, ingestion, registry, clock, output);
     }
 }

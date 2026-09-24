@@ -5,7 +5,6 @@ using System.Text.Json;
 using Rag.Companion.Adapters;
 using Rag.Companion.Host;
 using Rag.Companion.Ingestion;
-using Rag.Companion.LibreOffice;
 using Rag.Companion.Protocol;
 
 namespace Rag.Companion.Tests;
@@ -126,7 +125,7 @@ public sealed class CompanionRunTests : IDisposable
             config.ServiceClientKeyId,
             config.ServiceClientSecret,
             clock);
-        var registry = AdapterRegistry.CreateDefault(new LibreOfficeRunner("soffice.com"));
+        var registry = AdapterRegistry.CreateDefault();
         return new CompanionRun(config, companion, ingestion, registry, clock, output);
     }
 
