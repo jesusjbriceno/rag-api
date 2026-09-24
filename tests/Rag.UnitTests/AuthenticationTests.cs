@@ -18,7 +18,7 @@ public sealed class AuthenticationTests
         var repository = new InMemoryCredentialRepository(credential);
         using var rsa = RSA.Create(2048);
         using var keys = new JwtKeyMaterial(CreateJwtOptions(rsa));
-        var exchange = new CredentialExchangeHandler(repository, hasher, new JwtAccessTokenIssuer(Options.Create(CreateJwtOptions(rsa)), keys));
+        var exchange = new CredentialExchangeHandler(repository, hasher, new JwtAccessTokenIssuer(Options.Create(CreateJwtOptions(rsa)), keys), new HistoricalIngestionOptions());
 
         var token = await exchange.ExchangeAsync(credential.KeyId, "test-secret");
 
@@ -104,7 +104,8 @@ public sealed class AuthenticationTests
             var exchange = new CredentialExchangeHandler(
                 new InMemoryCredentialRepository(testCase.Credential),
                 hasher,
-                new ThrowingTokenIssuer());
+                new ThrowingTokenIssuer(),
+                new HistoricalIngestionOptions());
 
             var token = await exchange.ExchangeAsync(testCase.KeyId, testCase.Secret);
 
@@ -129,7 +130,8 @@ public sealed class AuthenticationTests
         var exchange = new CredentialExchangeHandler(
             new InMemoryCredentialRepository(credential),
             hasher,
-            new ThrowingTokenIssuer());
+            new ThrowingTokenIssuer(),
+            new HistoricalIngestionOptions());
 
         var token = await exchange.ExchangeAsync(credential.KeyId, "wrong-secret");
 
@@ -215,6 +217,9 @@ public sealed class AuthenticationTests
         public Task<bool> IsCurrentAsync(CredentialIdentity identity, DateTimeOffset now, CancellationToken cancellationToken) =>
             Task.FromResult(credential is not null && credential.Id == identity.CredentialId && credential.ServiceClientId == identity.ServiceClientId &&
                 credential.Version == identity.Version && credential.IsActiveAt(now));
+
+        public Task<ServiceClientGrant?> FindGrantAsync(Guid serviceClientId, CancellationToken cancellationToken) =>
+            Task.FromResult<ServiceClientGrant?>(null);
     }
 
     private sealed class RecordingHasher : ICredentialSecretHasher
@@ -237,5 +242,8 @@ public sealed class AuthenticationTests
     private sealed class ThrowingTokenIssuer : IAccessTokenIssuer
     {
         public AccessToken Issue(ClientCredential credential, DateTimeOffset now) => throw new InvalidOperationException();
+
+        public AccessToken Issue(ClientCredential credential, IReadOnlyList<string> scopes, Guid? collectionId, int? collectionGrantVersion, DateTimeOffset now) =>
+        throw new InvalidOperationException();
     }
 }

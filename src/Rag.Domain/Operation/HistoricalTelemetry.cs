@@ -51,7 +51,7 @@ public interface IOperationWorkloadClassifier
 
 public sealed class DefaultOperationWorkloadClassifier : IOperationWorkloadClassifier
 {
-    public OperationWorkloadClass Classify(Operation operation) => OperationWorkloadClass.RealTime;
+    public OperationWorkloadClass Classify(Operation operation) => operation.WorkloadClass;
 }
 
 public sealed class HistoricalTelemetry

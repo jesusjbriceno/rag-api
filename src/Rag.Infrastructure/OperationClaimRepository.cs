@@ -38,7 +38,7 @@ public sealed class OperationClaimRepository(IDbContextFactory<IngestionDbContex
             FROM operations
             WHERE "Status" = 'Pending'
                OR ("Status" = 'Running' AND "LeaseExpiresAt" <= clock_timestamp())
-            ORDER BY "CreatedAt", "Id"
+            ORDER BY (CASE WHEN "WorkloadClass" = 'Historical' THEN 1 ELSE 0 END), "CreatedAt", "Id"
             FOR UPDATE SKIP LOCKED
             LIMIT 1
             """).SingleOrDefaultAsync(cancellationToken);
