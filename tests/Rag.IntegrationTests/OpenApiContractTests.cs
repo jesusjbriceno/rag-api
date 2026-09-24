@@ -382,14 +382,21 @@ public sealed class OpenApiContractTests(OpenApiGenerationFactory generation) : 
     public void Retry_after_is_declared_on_exactly_the_operations_that_can_return_it()
     {
         var carrying = Operations(Document)
-            .Where(entry => Responses(entry.Operation).Any(response =>
-                response.Value?["headers"]?.AsObject()?.ContainsKey("Retry-After") == true))
-            .Select(entry => entry.Operation["operationId"]!.GetValue<string>())
+            .SelectMany(entry => Responses(entry.Operation)
+                .Where(response => response.Value?["headers"]?.AsObject()?.ContainsKey("Retry-After") == true)
+                .Select(response => $"{entry.Operation["operationId"]!.GetValue<string>()} {response.Key}"))
             .Order(StringComparer.Ordinal)
             .ToArray();
 
         Assert.Equal(
-            ["publish_historical_upload_content", "reserve_historical_upload"],
+            [
+                "create_client 409",
+                "issue_credential 409",
+                "publish_historical_upload_content 429",
+                "reserve_historical_upload 429",
+                "revoke_credential 409",
+                "rotate_credential 409",
+            ],
             carrying);
     }
 

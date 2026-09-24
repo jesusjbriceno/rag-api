@@ -25,7 +25,9 @@ internal static class AdminCredentialMutationEndpoints
             .DeclaresProblem(
                 StatusCodes.Status409Conflict,
                 "Conflict. The If-Match version does not match the current version, the credential is not active, the " +
-                "idempotency key was reused, or a rotation is already in progress.");
+                "idempotency key was reused, or a rotation is already in progress.",
+                retryAfterDescription: "Seconds to wait before retrying; when a rotation is already in progress the " +
+                    "response carries Retry-After: 1.");
         group.MapPost("/credentials/{credentialId:guid}/revoke", RevokeCredentialAsync)
             .WithName("revoke_credential")
             .Produces<AdminCredentialMetadata>(StatusCodes.Status200OK)
@@ -44,7 +46,9 @@ internal static class AdminCredentialMutationEndpoints
             .DeclaresProblem(
                 StatusCodes.Status409Conflict,
                 "Conflict. The If-Match version does not match the current version, the idempotency key was reused, " +
-                "or a revoke is already in progress.");
+                "or a revoke is already in progress.",
+                retryAfterDescription: "Seconds to wait before retrying; when a revoke is already in progress the " +
+                    "response carries Retry-After: 1.");
     }
 
     private static async Task<IResult> RotateCredentialAsync(

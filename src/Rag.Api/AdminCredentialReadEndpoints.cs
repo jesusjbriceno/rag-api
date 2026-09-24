@@ -21,7 +21,9 @@ internal static class AdminCredentialReadEndpoints
             .DeclaresProblem(
                 StatusCodes.Status409Conflict,
                 "Conflict. The idempotency key was reused, a secret was already delivered for this request, or an " +
-                "issue is already in progress.")
+                "issue is already in progress.",
+                retryAfterDescription: "Seconds to wait before retrying; when an issue is already in progress the " +
+                    "response carries Retry-After: 1.")
             .DeclaresProblem(
                 StatusCodes.Status415UnsupportedMediaType,
                 "Unsupported content type. The handler only accepts application/json.");

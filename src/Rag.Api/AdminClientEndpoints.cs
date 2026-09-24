@@ -19,7 +19,9 @@ internal static class AdminClientEndpoints
             .DeclaresProblem(
                 StatusCodes.Status409Conflict,
                 "Conflict. The idempotency key was reused with a different request, a create is already in progress, " +
-                "or a client with that name already exists.")
+                "or a client with that name already exists.",
+                retryAfterDescription: "Seconds to wait before retrying; when a create is already in progress the " +
+                    "response carries Retry-After: 1.")
             .DeclaresProblem(
                 StatusCodes.Status415UnsupportedMediaType,
                 "Unsupported content type. The handler only accepts application/json.");
