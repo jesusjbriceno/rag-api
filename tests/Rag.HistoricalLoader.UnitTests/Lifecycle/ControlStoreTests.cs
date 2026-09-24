@@ -1288,27 +1288,59 @@ public sealed class ControlStoreTests
 
                 // The readers keep reading until the writer finishes, so each read is taken while the writer is
                 // advancing: the observations have to span several steps, and every one of them is checked against
-                // the single step it reports.
+                // the single step it reports. That span is this case's own precondition, so it is fenced rather than
+                // assumed: on a saturated runner none of the readers was ever scheduled before the writer finished,
+                // the whole observation set came back empty, and the case failed its own precondition at random.
+                // Each reader reports the first read it completes and the first read it completes past step 1, and
+                // the writer waits for both before it stops. The reads themselves stay unsynchronised: they still
+                // race the writer's remaining steps, which is what the projection check below is read against.
+                var readersThatRead = 0;
+                var readersPastFirstStep = 0;
                 using var finished = new CancellationTokenSource();
                 var reads = Enumerable.Range(0, readers).Select(_ => Task.Run(async () =>
                 {
                     var seen = new List<int>();
+                    var reportedPastFirstStep = false;
                     while (!finished.IsCancellationRequested)
                     {
                         var snapshot = await controlStore.GetControlSnapshotAsync();
                         AssertSnapshotNamesOneCohortStep(snapshot);
-                        seen.Add(CohortIndex(snapshot.RunId!.Value));
+                        var index = CohortIndex(snapshot.RunId!.Value);
+                        seen.Add(index);
+
+                        if (seen.Count == 1)
+                        {
+                            Interlocked.Increment(ref readersThatRead);
+                        }
+
+                        if (index > 1 && !reportedPastFirstStep)
+                        {
+                            reportedPastFirstStep = true;
+                            Interlocked.Increment(ref readersPastFirstStep);
+                        }
                     }
 
                     return seen;
                 })).ToArray();
 
+                var readersDone = Task.WhenAll(reads);
+
                 try
                 {
+                    await WaitForReadersAsync(
+                        () => Volatile.Read(ref readersThatRead) == readers,
+                        readersDone,
+                        "Not every reader read the store within 60 s: the reader tasks are not being scheduled, so this case would have failed its own overlap precondition.");
+
                     for (var step = 2; step <= steps; step++)
                     {
                         await WriteStepAsync(step);
                     }
+
+                    await WaitForReadersAsync(
+                        () => Volatile.Read(ref readersPastFirstStep) == readers,
+                        readersDone,
+                        "Not every reader read a step past the first one within 60 s: the observations cannot span the writer's progress.");
                 }
                 finally
                 {
@@ -2122,6 +2154,32 @@ public sealed class ControlStoreTests
             Assert.Equal(snapshot.Inventory.CandidateCount * 100L, snapshot.Inventory.CandidateBytes);
             Assert.Equal(inventoryStep % 2 == 0 ? "complete" : "incomplete", snapshot.Inventory.Completeness);
         }
+
+    /// <summary>
+    /// Waits until every reader has reported the fact a concurrency case needs before its writer may stop. The
+    /// reader tasks are watched as well, so a reader that failed its own assertion is surfaced as that failure
+    /// instead of being reported as a reader that never got scheduled.
+    /// </summary>
+    private static async Task WaitForReadersAsync(Func<bool> everyReaderReported, Task readers, string failure)
+    {
+        var deadline = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(60);
+        while (!everyReaderReported() && !readers.IsCompleted && DateTimeOffset.UtcNow < deadline)
+        {
+            await Task.Delay(50);
+        }
+
+        if (everyReaderReported())
+        {
+            return;
+        }
+
+        if (readers.IsCompleted)
+        {
+            await readers;
+        }
+
+        Assert.Fail(failure);
+    }
 
     private static string CommandTableCounts(string path) => string.Join(
         ",",
