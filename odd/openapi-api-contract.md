@@ -93,7 +93,7 @@ Reproduce: `ConnectionStrings__Rag='Host=127.0.0.1;Port=45999;Database=rag;Usern
 plus the four `Jwt__CurrentSigningKey__*` / `Jwt__ValidationKeys__0__*` variables, then
 `dotnet build src/Rag.Api/Rag.Api.csproj -v n`.
 
-Task 1 work-unit commit: `0071cde` — this record only. The experimental wiring used by the probes
+Task 1 work-unit commit: `8af7fd1` — this record only. The experimental wiring used by the probes
 (`Directory.Packages.props`, `src/Rag.Api/Rag.Api.csproj`, `src/Rag.Api/Program.cs`) is deliberately **not** in
 that commit; task 2 owns it, because its shape depends on the generation-time configuration this finding demands.
 
