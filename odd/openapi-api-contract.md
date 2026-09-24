@@ -150,6 +150,22 @@ The document describes routes, not payloads: 18 paths with path parameters resol
 
 ---
 
+## Task 3 — plan: a typed contract, in three work units
+
+Scope decided with the maintainer: the document must describe payloads and security, and response schemas must not be able to lie, so the anonymous results become named response DTOs. Three work units, each its own commit on this branch and independently verifiable; the PR-or-push shape stays task 6's decision.
+
+**Hard constraint — the wire shape is the contract.** Public and historical responses are anonymous `snake_case` literals (`document_id`, `document_version_id`, `upload_id`, `queue_wait`, …) while admin responses are named records serialized camelCase. A named response record must therefore carry the same `[JsonPropertyName]` names the literal published, or the change silently breaks every consuming app. `CollectionRepresentation` and `SemanticRetrievalMatch` already match camelCase and are safe.
+
+**U1 — characterization tests for the shapes about to change.** `tests/Rag.IntegrationTests` pins much of the surface, but not all of it. Before any DTO moves, pin: the `POST /api/v1/retrieval:search` success payload (every `SemanticRetrievalMatch` field), the `ingestions:txt` `document_id` and `document_version_id`, the token body's `token_type` and `expires_in`, the historical `PUT` `declared_bytes`, and the admin nullable fields (`expiresAt`, `lastRotatedAt`, `revokedAt`, `state`) plus `nextCursor` beyond the audit route. Commit: tests only, no production change.
+
+**U2 — response DTOs that preserve the wire shape.** Replace the anonymous results with named records: public health, token, ingestion and operation status; historical upload reserve, content, commit, get and operation telemetry; leave the admin records as they are. Every snake_case member carries `[JsonPropertyName]`, and U1's tests must stay green *without edits* — that is the proof that the shape did not move. Commit: code plus tests.
+
+**U3 — endpoint metadata and security schemes.** `WithName` for operation ids; `WithTags` per plane (`public`, `admin`, `historical`) instead of the endpoint class names; `Accepts<T>` for the six hand-parsed bodies; `Produces<T>` and `ProducesProblem` per status code the code can actually return; the `If-Match` header on rotate and revoke and `Idempotency-Key` on the admin mutations. A document transformer declares `bearerAuth` (HTTP bearer, JWT) for the public and historical planes, and the admin plane's real scheme: six required headers (`X-Admin-App-Id`, `X-Admin-Key-Id`, `X-Admin-Timestamp`, `X-Admin-Signature`, `X-Admin-Assertion`, `Idempotency-Key`), expressible only as `apiKey` headers with the HMAC canonicalisation described in prose. The document must also state, where consumers read it, that the historical routes ship gated off (`HistoricalIngestion:Enabled=false`), that public routes reject scoped tokens (the fallback policy assertion), that historical routes require the exact scope strings, and that `/api/v1/health`, `/live` and `/ready` answer health payloads, not JSON — the two `MapHealthChecks` routes are outside the document today.
+
+Settle during U3: whether the two health-check routes get documented at all given their payload is not JSON, and whether `info.version` should track `Directory.Build.props` (`0.1.0-rc.1`) instead of the `1.0.0` default `AddOpenApi` produces.
+
+**Review workload:** U2 and U3 together are expected to run past 400 lines over nine files. Each unit is a separate commit so the reviewer can take them one at a time; if the combined slice is judged too large at task 6, U3 is the natural second PR.
+
 ## Tasks
 
 - [x] 1. Establish whether the document can be generated without PostgreSQL, and record the finding.
