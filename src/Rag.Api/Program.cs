@@ -16,7 +16,7 @@ using Rag.Infrastructure;
 
 var builder = WebApplication.CreateBuilder(args);
 
-builder.Services.AddOpenApi();
+builder.Services.AddOpenApi(OpenApiDocumentContract.Configure);
 
 var openApiGeneration = builder.Environment.IsEnvironment(ApiEndpointSupport.OpenApiGenerationEnvironment);
 
