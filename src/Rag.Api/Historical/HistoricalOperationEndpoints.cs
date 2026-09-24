@@ -9,6 +9,10 @@ public static class HistoricalOperationEndpoints
             GetAsync)
             .WithName("get_historical_operation")
             .Produces<HistoricalOperationTelemetryResponse>(StatusCodes.Status200OK)
+            .DeclaresProblem(
+                StatusCodes.Status404NotFound,
+                "Not found. The historical operation does not exist or does not belong to the caller; the handler " +
+                "answers application/problem+json titled \"Not found\".")
             .RequireAuthorization(HistoricalAuthorizationPolicies.OperationsRead);
     }
 

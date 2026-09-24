@@ -14,6 +14,31 @@ public static class HistoricalUploadEndpoints
             .DeclaresBody<ReserveHistoricalUploadRequest>("application/json", endpoints.IsOpenApiGeneration())
             .Produces<ReserveHistoricalUploadResponse>(StatusCodes.Status201Created)
             .Produces<ReserveHistoricalUploadResponse>(StatusCodes.Status200OK)
+            .DeclaresProblem(
+                StatusCodes.Status400BadRequest,
+                "Bad request. The JSON body is malformed or empty, or the reserve command is invalid; the handler " +
+                "answers application/problem+json titled \"Invalid input\".")
+            .DeclaresProblem(
+                StatusCodes.Status404NotFound,
+                "Not found. The collection does not exist or does not belong to the caller; the handler answers " +
+                "application/problem+json titled \"Not found\".")
+            .DeclaresProblem(
+                StatusCodes.Status409Conflict,
+                "Conflict. The idempotency key was reused with a different reserve fingerprint; the handler answers " +
+                "application/problem+json titled \"Conflict\".")
+            .DeclaresProblem(
+                StatusCodes.Status413PayloadTooLarge,
+                "Request body too large. The reserve body exceeds 16,384 bytes, whether declared through Content-Length " +
+                "or observed while streaming; the handler answers application/problem+json titled \"Request body too large\".")
+            .DeclaresProblem(
+                StatusCodes.Status415UnsupportedMediaType,
+                "Unsupported content type. The handler only accepts application/json and answers application/problem+json " +
+                "titled \"Unsupported content type\".")
+            .DeclaresProblem(
+                StatusCodes.Status429TooManyRequests,
+                "Too many requests. The per-client pending-upload quota or the total storage watermark was exceeded; " +
+                "the handler answers application/problem+json with Retry-After: 30. The route is also rate limited, and " +
+                "the limiter answers 429 with a Retry-After header.")
             .RequireAuthorization(HistoricalAuthorizationPolicies.UploadsWrite)
             .RequireRateLimiting(HistoricalRateLimitPolicies.Uploads);
 
@@ -23,6 +48,30 @@ public static class HistoricalUploadEndpoints
             .WithName("publish_historical_upload_content")
             .DeclaresBody<string>("text/plain", endpoints.IsOpenApiGeneration())
             .Produces<PublishedHistoricalUploadResponse>(StatusCodes.Status200OK)
+            .DeclaresProblem(
+                StatusCodes.Status400BadRequest,
+                "Bad request. The observed content length or SHA-256 does not match the reserve, or the content " +
+                "contract is invalid; the handler answers application/problem+json titled \"Invalid input\".")
+            .DeclaresProblem(
+                StatusCodes.Status404NotFound,
+                "Not found. The upload does not exist or does not belong to the caller; the handler answers " +
+                "application/problem+json titled \"Not found\".")
+            .DeclaresProblem(
+                StatusCodes.Status409Conflict,
+                "Conflict. The upload is already committed or was abandoned; the handler answers " +
+                "application/problem+json titled \"Conflict\".")
+            .DeclaresProblem(
+                StatusCodes.Status413PayloadTooLarge,
+                "Request body too large. The content exceeds the configured maximum normalized text size; the handler " +
+                "answers application/problem+json titled \"Request body too large\".")
+            .DeclaresProblem(
+                StatusCodes.Status415UnsupportedMediaType,
+                "Unsupported content type. The content body must be text/plain; the handler answers " +
+                "application/problem+json titled \"Unsupported content type\".")
+            .DeclaresProblem(
+                StatusCodes.Status429TooManyRequests,
+                "Too many requests. Publishing would cross the total storage watermark; the handler answers " +
+                "application/problem+json with Retry-After: 30.")
             .RequireAuthorization(HistoricalAuthorizationPolicies.UploadsWrite);
 
         endpoints.MapPost(
@@ -30,6 +79,14 @@ public static class HistoricalUploadEndpoints
             CommitAsync)
             .WithName("commit_historical_upload")
             .Produces<CommitHistoricalUploadResponse>(StatusCodes.Status200OK)
+            .DeclaresProblem(
+                StatusCodes.Status404NotFound,
+                "Not found. The upload or its collection does not exist or does not belong to the caller; the handler " +
+                "answers application/problem+json titled \"Not found\".")
+            .DeclaresProblem(
+                StatusCodes.Status409Conflict,
+                "Conflict. The upload is not in the published state; the handler answers application/problem+json " +
+                "titled \"Conflict\".")
             .RequireAuthorization(HistoricalAuthorizationPolicies.UploadsWrite);
 
         endpoints.MapGet(
@@ -37,6 +94,10 @@ public static class HistoricalUploadEndpoints
             GetAsync)
             .WithName("get_historical_upload")
             .Produces<HistoricalUploadStatusResponse>(StatusCodes.Status200OK)
+            .DeclaresProblem(
+                StatusCodes.Status404NotFound,
+                "Not found. The upload does not exist or does not belong to the caller; the handler answers " +
+                "application/problem+json titled \"Not found\".")
             .RequireAuthorization(HistoricalAuthorizationPolicies.UploadsWrite);
     }
 

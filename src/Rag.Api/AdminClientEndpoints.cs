@@ -11,13 +11,30 @@ internal static class AdminClientEndpoints
             .WithName("create_client")
             .DeclaresBody<AdminCreateClientRequest>("application/json", group.IsOpenApiGeneration())
             .Produces<AdminClientMetadata>(StatusCodes.Status201Created)
-            .Produces<AdminClientMetadata>(StatusCodes.Status200OK);
+            .Produces<AdminClientMetadata>(StatusCodes.Status200OK)
+            .DeclaresProblem(
+                StatusCodes.Status400BadRequest,
+                "Bad request. The Idempotency-Key claim is missing, the JSON body is malformed or empty, or the client " +
+                "name is invalid (a name of at most 200 characters is required).")
+            .DeclaresProblem(
+                StatusCodes.Status409Conflict,
+                "Conflict. The idempotency key was reused with a different request, a create is already in progress, " +
+                "or a client with that name already exists.")
+            .DeclaresProblem(
+                StatusCodes.Status415UnsupportedMediaType,
+                "Unsupported content type. The handler only accepts application/json.");
         group.MapGet("/clients", ListClientsAsync)
             .WithName("list_clients")
-            .Produces<AdminClientPage>(StatusCodes.Status200OK);
+            .Produces<AdminClientPage>(StatusCodes.Status200OK)
+            .DeclaresProblem(
+                StatusCodes.Status400BadRequest,
+                "Bad request. The limit is outside 1..100 or the cursor is invalid.");
         group.MapGet("/clients/{clientId:guid}", GetClientAsync)
             .WithName("get_client")
-            .Produces<AdminClientDetail>(StatusCodes.Status200OK);
+            .Produces<AdminClientDetail>(StatusCodes.Status200OK)
+            .DeclaresProblem(
+                StatusCodes.Status404NotFound,
+                "Not found. The client does not exist.");
     }
 
     private static async Task<IResult> CreateClientAsync(

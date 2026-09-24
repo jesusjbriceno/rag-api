@@ -280,6 +280,129 @@ public sealed class OpenApiContractTests(OpenApiGenerationFactory generation) : 
     }
 
     [Theory]
+    [InlineData("get", "/api/v1/health", "200,500")]
+    [InlineData("post", "/api/v1/auth/token", "200,400,401,415,429,500")]
+    [InlineData("post", "/api/v1/collections", "201,400,401,403,415,500")]
+    [InlineData("post", "/api/v1/collections/{collectionId}/ingestions:txt", "200,202,400,401,403,404,413,415,500")]
+    [InlineData("get", "/api/v1/collections/{collectionId}/operations/{operationId}", "200,401,403,404,500")]
+    [InlineData("post", "/api/v1/retrieval:search", "200,400,401,403,404,415,422,500")]
+    [InlineData("post", "/api/v1/admin/clients", "200,201,400,401,403,409,415,500")]
+    [InlineData("get", "/api/v1/admin/clients", "200,400,401,403,500")]
+    [InlineData("get", "/api/v1/admin/clients/{clientId}", "200,401,403,404,500")]
+    [InlineData("post", "/api/v1/admin/clients/{clientId}/credentials", "201,400,401,403,404,409,415,500")]
+    [InlineData("get", "/api/v1/admin/clients/{clientId}/credentials", "200,401,403,404,500")]
+    [InlineData("get", "/api/v1/admin/credentials/{credentialId}", "200,401,403,404,500")]
+    [InlineData("post", "/api/v1/admin/credentials/{credentialId}/rotate", "200,400,401,403,404,409,500")]
+    [InlineData("post", "/api/v1/admin/credentials/{credentialId}/revoke", "200,400,401,403,404,409,500")]
+    [InlineData("get", "/api/v1/admin/audit", "200,400,401,403,500")]
+    [InlineData("post", "/api/v1/historical/collections/{collectionId}/uploads", "200,201,400,401,403,404,409,413,415,429,500")]
+    [InlineData("put", "/api/v1/historical/uploads/{uploadId}/content", "200,400,401,403,404,409,413,415,429,500")]
+    [InlineData("post", "/api/v1/historical/uploads/{uploadId}:commit", "200,401,403,404,409,500")]
+    [InlineData("get", "/api/v1/historical/uploads/{uploadId}", "200,401,403,404,500")]
+    [InlineData("get", "/api/v1/historical/collections/{collectionId}/operations/{operationId}", "200,401,403,404,500")]
+    public void Every_operation_declares_its_exact_response_code_set(string method, string path, string expected)
+    {
+        var operation = OperationFor(Document, path, method);
+        Assert.NotNull(operation);
+        var declared = Responses(operation!).Select(response => response.Key).Order(StringComparer.Ordinal).ToArray();
+        Assert.Equal(expected.Split(',').Order(StringComparer.Ordinal).ToArray(), declared);
+    }
+
+    [Theory]
+    [InlineData("post", "/api/v1/collections", "400,415")]
+    [InlineData("post", "/api/v1/collections/{collectionId}/ingestions:txt", "400,415")]
+    [InlineData("post", "/api/v1/retrieval:search", "400,415")]
+    [InlineData("post", "/api/v1/admin/clients", "400,415")]
+    [InlineData("post", "/api/v1/admin/clients/{clientId}/credentials", "400,415")]
+    [InlineData("post", "/api/v1/historical/collections/{collectionId}/uploads", "400,415")]
+    [InlineData("put", "/api/v1/historical/uploads/{uploadId}/content", "400,415")]
+    public void Hand_parsed_endpoints_declare_problem_json_bodies_for_their_own_4xx(string method, string path, string codes)
+    {
+        var operation = OperationFor(Document, path, method);
+        Assert.NotNull(operation);
+        var responses = Responses(operation!);
+        foreach (var code in codes.Split(','))
+        {
+            var content = responses[code]?["content"]?.AsObject();
+            Assert.NotNull(content);
+            Assert.True(
+                content!.ContainsKey("application/problem+json"),
+                $"{method.ToUpperInvariant()} {path} {code} must declare an application/problem+json body.");
+        }
+    }
+
+    [Fact]
+    public void Framework_bound_token_exchange_declares_bodyless_400_and_415()
+    {
+        var operation = OperationFor(Document, "/api/v1/auth/token", "post");
+        Assert.NotNull(operation);
+        var responses = Responses(operation!);
+        foreach (var code in new[] { "400", "415" })
+        {
+            Assert.True(responses.ContainsKey(code), $"exchange_token must declare {code}.");
+            Assert.Null(responses[code]?["content"]);
+        }
+    }
+
+    [Theory]
+    [InlineData("/api/v1/health", "get")]
+    [InlineData("/api/v1/auth/token", "post")]
+    [InlineData("/api/v1/collections", "post")]
+    [InlineData("/api/v1/collections/{collectionId}/ingestions:txt", "post")]
+    [InlineData("/api/v1/collections/{collectionId}/operations/{operationId}", "get")]
+    [InlineData("/api/v1/retrieval:search", "post")]
+    [InlineData("/api/v1/admin/clients", "get,post")]
+    [InlineData("/api/v1/admin/clients/{clientId}", "get")]
+    [InlineData("/api/v1/admin/clients/{clientId}/credentials", "get,post")]
+    [InlineData("/api/v1/admin/credentials/{credentialId}", "get")]
+    [InlineData("/api/v1/admin/credentials/{credentialId}/rotate", "post")]
+    [InlineData("/api/v1/admin/credentials/{credentialId}/revoke", "post")]
+    [InlineData("/api/v1/admin/audit", "get")]
+    [InlineData("/api/v1/historical/collections/{collectionId}/uploads", "post")]
+    [InlineData("/api/v1/historical/uploads/{uploadId}", "get")]
+    [InlineData("/api/v1/historical/uploads/{uploadId}/content", "put")]
+    [InlineData("/api/v1/historical/uploads/{uploadId}:commit", "post")]
+    [InlineData("/api/v1/historical/collections/{collectionId}/operations/{operationId}", "get")]
+    public void Every_path_declares_its_exact_verb_set(string path, string verbs)
+    {
+        var pathItem = Document["paths"]?[path]?.AsObject();
+        Assert.NotNull(pathItem);
+        var declared = pathItem!.Select(entry => entry.Key)
+            .Where(IsOperation)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+        Assert.Equal(verbs.Split(',').Order(StringComparer.Ordinal).ToArray(), declared);
+    }
+
+    [Theory]
+    [InlineData("/api/v1/admin/credentials/{credentialId}/rotate")]
+    [InlineData("/api/v1/admin/credentials/{credentialId}/revoke")]
+    public void IfMatch_is_a_required_quoted_version_header_on_the_two_mutation_endpoints(string path)
+    {
+        var operation = OperationFor(Document, path, "post");
+        Assert.NotNull(operation);
+        var parameters = Parameters(operation!)
+            .Where(parameter => parameter["name"]?.GetValue<string>() == "If-Match")
+            .ToArray();
+        var parameter = Assert.Single(parameters);
+        Assert.Equal("header", parameter["in"]?.GetValue<string>());
+        Assert.True(parameter["required"]?.GetValue<bool>());
+        Assert.Contains("\"v3\"", parameter["description"]?.GetValue<string>() ?? string.Empty, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void IfMatch_is_declared_on_exactly_the_two_mutation_endpoints()
+    {
+        var carrying = Operations(Document)
+            .Where(entry => Parameters(entry.Operation).Any(parameter => parameter["name"]?.GetValue<string>() == "If-Match"))
+            .Select(entry => entry.Operation["operationId"]!.GetValue<string>())
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+
+        Assert.Equal(["revoke_credential", "rotate_credential"], carrying);
+    }
+
+    [Theory]
     [InlineData("/api/v1/auth/token", "post", "application/json", "TokenExchangeRequest")]
     [InlineData("/api/v1/collections", "post", "application/json", "CreateCollectionRequest")]
     [InlineData("/api/v1/collections/{collectionId}/ingestions:txt", "post", "application/json", "TxtIngestionRequest")]
@@ -310,7 +433,7 @@ public sealed class OpenApiContractTests(OpenApiGenerationFactory generation) : 
     {
         var pathItem = document["paths"]?[path]?.AsObject();
         Assert.NotNull(pathItem);
-        return pathItem!.Where(entry => IsHttpMethod(entry.Key)).Select(entry => entry.Value!).ToArray();
+        return pathItem!.Where(entry => IsOperation(entry.Key)).Select(entry => entry.Value!).ToArray();
     }
 
     private static JsonNode? OperationFor(JsonNode document, string path, string method)
@@ -328,7 +451,7 @@ public sealed class OpenApiContractTests(OpenApiGenerationFactory generation) : 
         {
             foreach (var method in path.Value?.AsObject() ?? [])
             {
-                if (IsHttpMethod(method.Key))
+                if (IsOperation(method.Key))
                 {
                     yield return (path.Key, method.Key, method.Value!);
                 }
@@ -336,7 +459,18 @@ public sealed class OpenApiContractTests(OpenApiGenerationFactory generation) : 
         }
     }
 
-    private static bool IsHttpMethod(string key) => key is "get" or "post" or "put" or "delete" or "patch";
+    private static readonly string[] NonOperationPathItemKeys = ["parameters", "summary", "description", "servers"];
+
+    /// <summary>
+    /// The inverted OpenAPI rule: inside a path item every key that is not a path-item field is an operation, so a
+    /// HEAD, OPTIONS or TRACE verb cannot stay invisible to the assertions.
+    /// </summary>
+    private static bool IsOperation(string key) => !NonOperationPathItemKeys.Contains(key, StringComparer.Ordinal);
+
+    private static JsonObject Responses(JsonNode operation) => operation["responses"]?.AsObject() ?? new JsonObject();
+
+    private static IReadOnlyList<JsonNode> Parameters(JsonNode operation) =>
+        operation["parameters"]?.AsArray()?.Select(parameter => parameter!).ToArray() ?? [];
 
     private static IReadOnlyList<string> SchemaNames(JsonNode? content)
     {

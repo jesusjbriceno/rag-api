@@ -163,6 +163,26 @@ app.MapPost("/api/v1/auth/token", async (TokenExchangeRequest request, Credentia
     .WithName("exchange_token")
     .DeclaresBody<TokenExchangeRequest>("application/json", openApiGeneration)
     .Produces<TokenResponse>(StatusCodes.Status200OK)
+    .DeclaresProblem(
+        StatusCodes.Status400BadRequest,
+        "Bad request. The framework binds the request body, so a malformed payload is rejected before the handler " +
+        "runs with no response body; an unknown scope is answered by the handler as application/problem+json titled " +
+        "\"invalid_scope\".",
+        hasBody: false)
+    .DeclaresProblem(
+        StatusCodes.Status401Unauthorized,
+        "Unauthorized. The credential key id is unknown or the secret does not match; the handler answers " +
+        "application/problem+json titled \"Unauthorized\".")
+    .DeclaresProblem(
+        StatusCodes.Status415UnsupportedMediaType,
+        "Unsupported content type. The framework binds the request body as application/json; any other content type " +
+        "is rejected before the handler runs, with no response body.",
+        hasBody: false)
+    .DeclaresProblem(
+        StatusCodes.Status429TooManyRequests,
+        "Too many requests. The credential exchange is limited to five requests per minute per caller; the rate " +
+        "limiter answers 429 with a Retry-After header and no response body.",
+        hasBody: false)
     .AllowAnonymous()
     .RequireRateLimiting("credential-exchange");
 
@@ -186,7 +206,15 @@ app.MapPost("/api/v1/collections", async (HttpContext context, CreateCollectionH
     })
     .WithName("create_collection")
     .DeclaresBody<CreateCollectionRequest>("application/json", openApiGeneration)
-    .Produces<CollectionRepresentation>(StatusCodes.Status201Created);
+    .Produces<CollectionRepresentation>(StatusCodes.Status201Created)
+    .DeclaresProblem(
+        StatusCodes.Status400BadRequest,
+        "Bad request. The JSON body is malformed or empty, or the collection name is invalid; the handler answers " +
+        "application/problem+json titled \"Invalid input\".")
+    .DeclaresProblem(
+        StatusCodes.Status415UnsupportedMediaType,
+        "Unsupported content type. The handler only accepts application/json and answers application/problem+json " +
+        "titled \"Unsupported content type\".");
 
 app.MapPost("/api/v1/collections/{collectionId:guid}/ingestions:txt", async (
     Guid collectionId,
@@ -226,7 +254,23 @@ app.MapPost("/api/v1/collections/{collectionId:guid}/ingestions:txt", async (
     .WithName("accept_txt_ingestion")
     .DeclaresBody<TxtIngestionRequest>("application/json", openApiGeneration)
     .Produces<TxtIngestionResponse>(StatusCodes.Status202Accepted)
-    .Produces<TxtIngestionResponse>(StatusCodes.Status200OK);
+    .Produces<TxtIngestionResponse>(StatusCodes.Status200OK)
+    .DeclaresProblem(
+        StatusCodes.Status400BadRequest,
+        "Bad request. The JSON body is malformed or empty, or the ingestion input is invalid; the handler answers " +
+        "application/problem+json titled \"Invalid input\".")
+    .DeclaresProblem(
+        StatusCodes.Status404NotFound,
+        "Not found. The collection does not exist or does not belong to the caller; the handler answers " +
+        "application/problem+json titled \"Not found\".")
+    .DeclaresProblem(
+        StatusCodes.Status413PayloadTooLarge,
+        "Request body too large. The body exceeds 1,048,576 bytes, whether declared through Content-Length or " +
+        "observed while streaming; the handler answers application/problem+json titled \"Request body too large\".")
+    .DeclaresProblem(
+        StatusCodes.Status415UnsupportedMediaType,
+        "Unsupported content type. The handler only accepts application/json and answers application/problem+json " +
+        "titled \"Unsupported content type\".");
 
 app.MapGet("/api/v1/collections/{collectionId:guid}/operations/{operationId:guid}", async (
     Guid collectionId,
@@ -252,7 +296,11 @@ app.MapGet("/api/v1/collections/{collectionId:guid}/operations/{operationId:guid
         }
     })
     .WithName("get_operation_status")
-    .Produces<OperationStatusResponse>(StatusCodes.Status200OK);
+    .Produces<OperationStatusResponse>(StatusCodes.Status200OK)
+    .DeclaresProblem(
+        StatusCodes.Status404NotFound,
+        "Not found. The operation does not exist or does not belong to the caller; the handler answers " +
+        "application/problem+json titled \"Not found\".");
 
 app.MapPost("/api/v1/retrieval:search", async (HttpContext context, SemanticRetrievalHandler handler, CancellationToken cancellationToken) =>
     {
@@ -288,7 +336,23 @@ app.MapPost("/api/v1/retrieval:search", async (HttpContext context, SemanticRetr
     })
     .WithName("retrieval_search")
     .DeclaresBody<RetrievalSearchRequest>("application/json", openApiGeneration)
-    .Produces<IReadOnlyList<SemanticRetrievalMatch>>(StatusCodes.Status200OK);
+    .Produces<IReadOnlyList<SemanticRetrievalMatch>>(StatusCodes.Status200OK)
+    .DeclaresProblem(
+        StatusCodes.Status400BadRequest,
+        "Bad request. The JSON body is malformed or empty, or the query is invalid; the handler answers " +
+        "application/problem+json titled \"Invalid input\".")
+    .DeclaresProblem(
+        StatusCodes.Status404NotFound,
+        "Not found. One of the requested collections does not exist or does not belong to the caller; the handler " +
+        "answers application/problem+json titled \"Not found\".")
+    .DeclaresProblem(
+        StatusCodes.Status415UnsupportedMediaType,
+        "Unsupported content type. The handler only accepts application/json and answers application/problem+json " +
+        "titled \"Unsupported content type\".")
+    .DeclaresProblem(
+        StatusCodes.Status422UnprocessableEntity,
+        "Unprocessable entity. The requested collections use incompatible embedding profiles; the handler answers " +
+        "application/problem+json titled \"Incompatible embedding profiles\".");
 
 if (builder.Configuration.GetValue<bool>("AdminPlane:Enabled"))
 {

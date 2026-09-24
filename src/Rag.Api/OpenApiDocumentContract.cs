@@ -1,5 +1,7 @@
+using System.Globalization;
 using System.Reflection;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.OpenApi;
 using Microsoft.OpenApi;
 
@@ -43,6 +45,10 @@ public static class OpenApiDocumentContract
     private const string AdminCanonicalString =
         "METHOD\nPathAndQuery\nBodyHash\nAssertionHash\nAppId\nKeyId\nTimestampUnixSeconds\nIdempotencyKey";
 
+    private const string ProblemContentType = "application/problem+json";
+
+    private const string ProblemSchemaId = "ProblemDetails";
+
     /// <summary>The three plane tags the document declares, in the order they describe the contract.</summary>
     private static readonly (string Name, string Description)[] PlaneTagDescriptions =
     [
@@ -82,6 +88,54 @@ public static class OpenApiDocumentContract
     /// </summary>
     internal static RouteHandlerBuilder DeclaresBody<TRequest>(this RouteHandlerBuilder builder, string contentType, bool openApiGeneration) =>
         openApiGeneration ? builder.Accepts<TRequest>(contentType) : builder;
+
+    /// <summary>
+    /// A non-success response the handler can produce, for the generated document only. It carries the description
+    /// the operation transformer attaches to the response the matching <c>Produces</c> call already created.
+    /// </summary>
+    internal sealed record ProblemResponseMetadata(int StatusCode, string Description);
+
+    /// <summary>
+    /// Declares a non-success response for the generated document only. A response with a body is the handler's own
+    /// RFC 7807 problem (<c>application/problem+json</c>); the bodyless form covers responses the framework produces
+    /// before the handler runs, such as a wrong content type on a framework-bound body. Neither form changes runtime
+    /// behaviour.
+    /// </summary>
+    internal static RouteHandlerBuilder DeclaresProblem(
+        this RouteHandlerBuilder builder,
+        int statusCode,
+        string description,
+        bool hasBody = true)
+    {
+        if (hasBody)
+        {
+            builder.Produces<ProblemDetails>(statusCode, ProblemContentType);
+        }
+        else
+        {
+            builder.Produces(statusCode);
+        }
+
+        builder.WithMetadata(new ProblemResponseMetadata(statusCode, description));
+        return builder;
+    }
+
+    /// <summary>
+    /// Declares a request header the handler reads itself, for the generated document only. The handler binds the
+    /// value manually (for example through <c>AdminEndpointSupport.TryParseIfMatch</c>), so there is no endpoint
+    /// parameter for the generator to discover.
+    /// </summary>
+    internal sealed record HeaderParameterMetadata(string Name, bool Required, string Description);
+
+    internal static RouteHandlerBuilder DeclaresHeader(
+        this RouteHandlerBuilder builder,
+        string name,
+        bool required,
+        string description)
+    {
+        builder.WithMetadata(new HeaderParameterMetadata(name, required, description));
+        return builder;
+    }
 
     /// <summary>
     /// Resolves the generation flag for mapping code that cannot receive it as a parameter. It reports the same host
@@ -135,6 +189,10 @@ public static class OpenApiDocumentContract
         // declaring class disappears. The plane is the same decision that selects the security below.
         operation.Tags = new HashSet<OpenApiTagReference> { new(PlaneTag(policy), context.Document) };
 
+        DeclareProblemDescriptions(operation, metadata, policy == AdminPolicy);
+        DeclareHeaderParameters(operation, metadata);
+        DeclareInternalServerError(operation, context.Document, policy == AdminPolicy);
+
         if (anonymous)
         {
             // No requirement at all: omit the property so the operation does not inherit a global scheme.
@@ -161,6 +219,59 @@ public static class OpenApiDocumentContract
         EnsureAuthenticationResponses(operation);
         return Task.CompletedTask;
     }
+
+    private static void DeclareProblemDescriptions(OpenApiOperation operation, IEnumerable<object> metadata, bool admin)
+    {
+        const string adminNote =
+            " The admin plane answers application/problem+json with the code extension and, when present, traceId.";
+
+        foreach (var problem in metadata.OfType<ProblemResponseMetadata>())
+        {
+            if (operation.Responses?.TryGetValue(problem.StatusCode.ToString(CultureInfo.InvariantCulture), out var response) == true &&
+                response is OpenApiResponse concrete)
+            {
+                concrete.Description = admin ? problem.Description + adminNote : problem.Description;
+            }
+        }
+    }
+
+    private static void DeclareHeaderParameters(OpenApiOperation operation, IEnumerable<object> metadata)
+    {
+        foreach (var header in metadata.OfType<HeaderParameterMetadata>())
+        {
+            operation.Parameters ??= [];
+            operation.Parameters.Add(new OpenApiParameter
+            {
+                Name = header.Name,
+                In = ParameterLocation.Header,
+                Required = header.Required,
+                Description = header.Description,
+            });
+        }
+    }
+
+    private static void DeclareInternalServerError(OpenApiOperation operation, OpenApiDocument? document, bool admin)
+    {
+        operation.Responses ??= new OpenApiResponses();
+        operation.Responses.TryAdd("500", new OpenApiResponse
+        {
+            Description = admin
+                ? "Internal server error. The global exception handler answers application/problem+json titled " +
+                  "\"Internal server error\"; the admin plane also carries the code extension and, when present, traceId."
+                : "Internal server error. The global exception handler answers application/problem+json titled " +
+                  "\"Internal server error\".",
+            Content = ProblemContent(document),
+        });
+    }
+
+    private static Dictionary<string, OpenApiMediaType> ProblemContent(OpenApiDocument? document) =>
+        new(StringComparer.Ordinal)
+        {
+            [ProblemContentType] = new OpenApiMediaType
+            {
+                Schema = new OpenApiSchemaReference(ProblemSchemaId, document),
+            },
+        };
 
     private static string PlaneTag(string? policy) => policy switch
     {
