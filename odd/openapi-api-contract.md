@@ -123,10 +123,37 @@ What the rest of the plan has to absorb:
    `-warnaserror` (`Directory.Build.props` and the workflows were checked), so it is not fatal today; task 2 should
    either move to 10.0.12 (the installed runtime) or pin the transitive package.
 
+## Task 2 — generation wiring and its evidence
+
+Work-unit commit: `8255917` (5 files, +61/−12). `OpenApiGenerateDocumentsOnBuild` is defaulted to `false` and set to `true` only when `'$(ASPNETCORE_ENVIRONMENT)' == 'OpenApiGeneration'`; a new `appsettings.OpenApiGeneration.json` enables `AdminPlane:Enabled` and `HistoricalIngestion:Enabled` for that pass only; `AddInfrastructure(configuration, forOpenApiGeneration)` swaps every `.ValidateOnStart()` for `.ValidateOnStartUnlessOpenApiGeneration(...)` and guards both `AddHostedService` calls.
+
+Three implementation traps worth keeping:
+
+1. **Conditioning the property alone does not disable generation.** `Microsoft.Extensions.ApiDescription.Server.targets` contains `<OpenApiGenerateDocumentsOnBuild Condition=" '$(OpenApiGenerateDocumentsOnBuild)' == '' ">$(OpenApiGenerateDocuments)</OpenApiGenerateDocumentsOnBuild>` and `OpenApiGenerateDocuments` defaults to `true`, so an unset property is re-defaulted to `true` after the project body is evaluated. The `false` default line in `Rag.Api.csproj` is load-bearing: without it a plain `dotnet build Rag.sln` fails with 24 errors (`MSB3073`, `dotnet-getdocument` exit code 11) because JWT validation fails inside the launched host. `dotnet msbuild src/Rag.Api/Rag.Api.csproj -getProperty:OpenApiGenerateDocumentsOnBuild` reads `false` normally and `true` with the environment variable set.
+2. **`--environment` does not exist in this toolchain.** Both `dotnet-getdocument` and `GetDocument.Insider` lack the flag in 10.0.1 and in 10.0.12 (checked in the packaged `--help` output and in the `.props`/`.targets`); the `OpenApiGenerationEnvironment` property only lands in the 11.0 preview line. The environment therefore has to come from the caller's process environment.
+3. **The content root follows the working directory, not the assembly.** Invoking `dotnet-getdocument` directly from the repository root yields a public-plane-only six-path document, because neither `appsettings.json` nor `appsettings.OpenApiGeneration.json` is found there. The publisher in task 4 must use the MSBuild command (which runs in the project directory) or set the working directory to `src/Rag.Api`.
+
+Verified evidence:
+
+| Check | Result |
+| --- | --- |
+| `dotnet build Rag.sln` with no environment variable | exit 0, `0` occurrences of `GenerateOpenApiDocuments`, `docs/api` untouched |
+| `ASPNETCORE_ENVIRONMENT=OpenApiGeneration dotnet build src/Rag.Api/Rag.Api.csproj` from a deleted `docs/api` | exit 0, recreates `docs/api/Rag.Api.json`, 10590 bytes, sha256 `0b187af3e43c619080ec5bebc22c51c2d2717dde6bb737033075bf30c0393ba6`, 18 paths — 6 public, 7 admin, 5 historical |
+| PostgreSQL listener on `127.0.0.1:45999` during generation | **0 TCP connections**, no `Npgsql` and no worker-failure line in the log |
+| Direct `dotnet-getdocument` run with the working directory at `src/Rag.Api` | byte-identical document (same sha256), also 0 connections |
+| `dotnet test Rag.sln` | exit 0 — 756 passed, 0 failed, 0 skipped across five assemblies |
+| NU1903 after the version bump | no warning names `Microsoft.OpenApi`; the remaining `SQLitePCLRaw.lib.e_sqlite3` warnings are pre-existing (`Microsoft.Data.Sqlite` 10.0.1, untouched by this branch, reproduced by building `src/Rag.HistoricalLoader.Core` on its own) |
+
+The document is **not** committed yet (task 4) and nothing has been pushed.
+
+The document describes routes, not payloads: 18 paths with path parameters resolved, no `operationId`, one component schema (`TokenExchangeRequest` — the only body bound through the minimal-API binder), no request body for the six endpoints that parse JSON through `ApiEndpointSupport.ReadJsonAsync<T>` or `AdminEndpointSupport.ReadJsonAsync<T>`, `200`-only responses without content schemas, no `components.securitySchemes`, and tags taken from the endpoint class names. Task 3 therefore needs endpoint metadata and a security-scheme transformer, not just a review pass.
+
+---
+
 ## Tasks
 
 - [x] 1. Establish whether the document can be generated without PostgreSQL, and record the finding.
-- [ ] 2. Add `Microsoft.AspNetCore.OpenApi` and build-time generation to `Rag.Api`.
+- [x] 2. Add `Microsoft.AspNetCore.OpenApi` and build-time generation to `Rag.Api`.
 - [ ] 3. Generate the document and review it against the three planes: every route present, request and response
   schemas resolved, the historical flag caveat stated, and security schemes matching what the code enforces.
 - [ ] 4. Commit the generated document under `docs/api/` and add the publisher script.
