@@ -1,6 +1,8 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Reflection;
 using System.Security.Cryptography;
+using System.Text.Json;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Configuration;
@@ -35,6 +37,23 @@ public sealed class AuthApiTests : IClassFixture<AuthApiFactory>
         Assert.Equal(HttpStatusCode.Unauthorized, fifth.StatusCode);
         Assert.Equal(HttpStatusCode.TooManyRequests, rateLimited.StatusCode);
         Assert.Equal(await malformed.Content.ReadAsStringAsync(), await missingSecret.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
+    public async Task Health_reports_assembly_informational_version()
+    {
+        var expected = typeof(global::Program).Assembly
+            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion;
+
+        Assert.False(string.IsNullOrWhiteSpace(expected));
+
+        var health = await _client.GetAsync("/api/v1/health");
+        health.EnsureSuccessStatusCode();
+
+        using var payload = JsonDocument.Parse(await health.Content.ReadAsStringAsync());
+        var version = payload.RootElement.GetProperty("version").GetString();
+
+        Assert.Equal(expected, version);
     }
 }
 

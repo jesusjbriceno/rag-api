@@ -1,3 +1,6 @@
+ARG VERSION=0.1.0-rc.1
+ARG REVISION=dev
+
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src
 
@@ -7,6 +10,10 @@ RUN dotnet publish src/Rag.Api/Rag.Api.csproj --configuration Release --no-resto
 RUN dotnet publish src/Rag.Operator/Rag.Operator.csproj --configuration Release --no-restore --output /out/operator /p:UseAppHost=false
 
 FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
+ARG VERSION
+ARG REVISION
+LABEL org.opencontainers.image.version=${VERSION} \
+      org.opencontainers.image.revision=${REVISION}
 RUN apt-get update \
     && apt-get install --yes --no-install-recommends curl \
     && rm -rf /var/lib/apt/lists/* \

@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Reflection;
 using System.Security.Claims;
 using System.Text;
 using System.Text.Json;
@@ -103,7 +104,11 @@ app.MapHealthChecks("/api/v1/health/ready", new HealthCheckOptions
 {
     Predicate = healthCheck => healthCheck.Tags.Contains("ready"),
 }).AllowAnonymous();
-app.MapGet("/api/v1/health", () => Results.Ok(new { status = "healthy" })).AllowAnonymous();
+var informationalVersion = typeof(Program).Assembly
+    .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
+    ?? "unknown";
+
+app.MapGet("/api/v1/health", () => Results.Ok(new { status = "healthy", version = informationalVersion })).AllowAnonymous();
 app.MapPost("/api/v1/auth/token", async (TokenExchangeRequest request, CredentialExchangeHandler handler, CancellationToken cancellationToken) =>
     {
         var token = await handler.ExchangeAsync(request.KeyId, request.Secret, cancellationToken);
