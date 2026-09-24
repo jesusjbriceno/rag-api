@@ -15,6 +15,7 @@ using Npgsql;
 using Pgvector;
 using Pgvector.EntityFrameworkCore;
 using Rag.Application;
+using Rag.Application.Auth;
 using Rag.Domain;
 using Rag.Infrastructure;
 
@@ -130,6 +131,77 @@ public sealed class ProtectedApiTests(PostgreSqlFixture fixture) : IAsyncLifetim
         AssertProblem(incompatibleSearch, HttpStatusCode.UnprocessableEntity);
     }
 
+    [Fact]
+    public async Task Historical_scope_exchange_is_rejected_by_the_default_feature_gate()
+    {
+        var historical = await CreateHistoricalClientAsync(_factory);
+
+        var response = await _client.PostAsJsonAsync("/api/v1/auth/token", new
+        {
+            keyId = historical.KeyId,
+            secret = historical.Secret,
+            scope = $"{HistoricalScopes.UploadsWrite} {HistoricalScopes.OperationsRead}",
+        });
+
+        AssertProblem(response, HttpStatusCode.BadRequest);
+        Assert.Contains("invalid_scope", await response.Content.ReadAsStringAsync(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Historical_scoped_token_is_issued_with_the_legacy_grant_and_denied_on_real_time_routes()
+    {
+        using var enabledFactory = new ProtectedApiFactory(fixture.ConnectionString, _contentRoot, enableHistoricalIngestion: true);
+        using var enabledClient = enabledFactory.CreateClient();
+        var historical = await CreateHistoricalClientAsync(enabledFactory);
+
+        var exchange = await enabledClient.PostAsJsonAsync("/api/v1/auth/token", new
+        {
+            keyId = historical.KeyId,
+            secret = historical.Secret,
+            scope = $"{HistoricalScopes.UploadsWrite} {HistoricalScopes.OperationsRead}",
+        });
+        var exchangeBody = await exchange.Content.ReadAsStringAsync();
+        var gate = enabledFactory.Services.GetRequiredService<HistoricalIngestionOptions>().Enabled;
+        var raw = enabledFactory.Services.GetRequiredService<Microsoft.Extensions.Configuration.IConfiguration>()["HistoricalIngestion:Enabled"];
+        Assert.True(exchange.StatusCode == HttpStatusCode.OK, $"status={exchange.StatusCode} gate={gate} raw='{raw}' body={exchangeBody}");
+        var scopedToken = (await exchange.Content.ReadFromJsonAsync<TokenResponse>())!;
+        Assert.Equal("historical:operations.read historical:uploads.write", scopedToken.Scope);
+
+        var legacyExchange = await enabledClient.PostAsJsonAsync("/api/v1/auth/token", new { keyId = historical.KeyId, secret = historical.Secret });
+        var legacyToken = (await legacyExchange.Content.ReadFromJsonAsync<TokenResponse>())!;
+        Assert.Null(legacyToken.Scope);
+
+        var legacyCreate = await SendWithClientAsync(enabledClient, legacyToken.AccessToken, HttpMethod.Post, "/api/v1/collections", "application/json", "{\"name\":\"legacy-compatible-collection\"}");
+        Assert.Equal(HttpStatusCode.Created, legacyCreate.StatusCode);
+
+        var denied = await SendWithClientAsync(enabledClient, scopedToken.AccessToken, HttpMethod.Post, "/api/v1/collections", "application/json", "{\"name\":\"should-not-exist\"}");
+        Assert.Equal(HttpStatusCode.Forbidden, denied.StatusCode);
+    }
+
+    private async Task<HistoricalClient> CreateHistoricalClientAsync(ProtectedApiFactory factory)
+    {
+        using var scope = factory.Services.CreateScope();
+        var issued = await scope.ServiceProvider.GetRequiredService<CredentialOperator>().IssueAsync($"historical-{Guid.NewGuid():N}", null);
+
+        var options = new DbContextOptionsBuilder<IngestionDbContext>()
+            .UseNpgsql(fixture.ConnectionString, providerOptions => providerOptions.UseVector())
+            .Options;
+        await using var context = new IngestionDbContext(options);
+        var legacy = new Collection(Guid.NewGuid(), issued.ServiceClientId, "legacy", DateTimeOffset.UtcNow, EmbeddingProfile.Default);
+        context.Collections.Add(legacy);
+        context.ServiceClientGrants.Add(new ServiceClientGrantEntity
+        {
+            Id = Guid.NewGuid(),
+            ServiceClientId = issued.ServiceClientId,
+            Scopes = $"{HistoricalScopes.UploadsWrite} {HistoricalScopes.OperationsRead}",
+            CollectionId = legacy.Id,
+            Version = 1,
+            CreatedAt = DateTimeOffset.UtcNow,
+        });
+        await context.SaveChangesAsync();
+        return new HistoricalClient(issued.KeyId, issued.Secret, issued.ServiceClientId, legacy.Id);
+    }
+
     private async Task<ApiClient> CreateAuthenticatedClientAsync(string name)
     {
         using var scope = _factory.Services.CreateScope();
@@ -190,12 +262,13 @@ public sealed class ProtectedApiTests(PostgreSqlFixture fixture) : IAsyncLifetim
     }
 
     private sealed record ApiClient(Guid ServiceClientId, string Token);
-    private sealed record TokenResponse([property: JsonPropertyName("access_token")] string AccessToken);
+    private sealed record HistoricalClient(string KeyId, string Secret, Guid ServiceClientId, Guid LegacyCollectionId);
+    private sealed record TokenResponse([property: JsonPropertyName("access_token")] string AccessToken, [property: JsonPropertyName("scope")] string? Scope = null);
     private sealed record CollectionResponse(Guid Id, string Name);
     private sealed record IngestionResponse([property: JsonPropertyName("operation_id")] Guid OperationId);
 }
 
-public sealed class ProtectedApiFactory(string connectionString, string contentRoot) : WebApplicationFactory<global::Program>
+public sealed class ProtectedApiFactory(string connectionString, string contentRoot, bool enableHistoricalIngestion = false) : WebApplicationFactory<global::Program>
 {
     private readonly RSA _rsa = RSA.Create(2048);
 
@@ -219,6 +292,7 @@ public sealed class ProtectedApiFactory(string connectionString, string contentR
             ["Jwt:CurrentSigningKey:PrivateKeyPem"] = _rsa.ExportRSAPrivateKeyPem(),
             ["Jwt:ValidationKeys:0:KeyId"] = "integration-key",
             ["Jwt:ValidationKeys:0:PublicKeyPem"] = _rsa.ExportRSAPublicKeyPem(),
+            ["HistoricalIngestion:Enabled"] = enableHistoricalIngestion.ToString(),
         }));
         builder.ConfigureServices(services =>
         {

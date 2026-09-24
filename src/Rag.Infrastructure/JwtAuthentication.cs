@@ -133,21 +133,48 @@ public sealed class JwtKeyMaterial : IDisposable
 
 public sealed class JwtAccessTokenIssuer(IOptions<JwtOptions> options, JwtKeyMaterial keyMaterial) : IAccessTokenIssuer
 {
-    public AccessToken Issue(ClientCredential credential, DateTimeOffset now)
+    public AccessToken Issue(ClientCredential credential, DateTimeOffset now) =>
+        Issue(credential, scopes: [], collectionId: null, collectionGrantVersion: null, now);
+
+    public AccessToken Issue(
+        ClientCredential credential,
+        IReadOnlyList<string> scopes,
+        Guid? collectionId,
+        int? collectionGrantVersion,
+        DateTimeOffset now)
     {
+        var claims = new List<Claim>
+        {
+            new("client_id", credential.ServiceClientId.ToString("D")),
+            new("credential_id", credential.Id.ToString("D")),
+            new("credential_version", credential.Version.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+        };
+
+        var normalizedScope = scopes is { Count: > 0 } ? string.Join(' ', scopes) : null;
+        if (normalizedScope is not null)
+        {
+            claims.Add(new Claim("scope", normalizedScope));
+        }
+
+        if (collectionId is { } grantedCollectionId)
+        {
+            claims.Add(new Claim("collection_id", grantedCollectionId.ToString("D")));
+        }
+
+        if (collectionGrantVersion is { } grantedVersion)
+        {
+            claims.Add(new Claim("collection_grant_version", grantedVersion.ToString(System.Globalization.CultureInfo.InvariantCulture)));
+        }
+
         var expiresAt = now.AddMinutes(15);
         var token = new JwtSecurityToken(
             options.Value.Issuer,
             options.Value.Audience,
-            [
-                new Claim("client_id", credential.ServiceClientId.ToString("D")),
-                new Claim("credential_id", credential.Id.ToString("D")),
-                new Claim("credential_version", credential.Version.ToString(System.Globalization.CultureInfo.InvariantCulture)),
-            ],
+            claims,
             now.UtcDateTime,
             expiresAt.UtcDateTime,
             new SigningCredentials(keyMaterial.CurrentSigningKey, SecurityAlgorithms.RsaSha256));
         token.Header[JwtHeaderParameterNames.Kid] = keyMaterial.CurrentSigningKey.KeyId;
-        return new AccessToken(new JwtSecurityTokenHandler().WriteToken(token), expiresAt);
+        return new AccessToken(new JwtSecurityTokenHandler().WriteToken(token), expiresAt, normalizedScope);
     }
 }

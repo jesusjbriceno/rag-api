@@ -15,6 +15,19 @@ public sealed class CredentialRepository(IngestionDbContext context) : ICredenti
     public Task<ServiceClient?> FindServiceClientByNameAsync(string name, CancellationToken cancellationToken) =>
         context.ServiceClients.SingleOrDefaultAsync(client => client.Name == name, cancellationToken);
 
+    public async Task<ServiceClientGrant?> FindGrantAsync(Guid serviceClientId, CancellationToken cancellationToken)
+    {
+        var grant = await context.ServiceClientGrants
+            .AsNoTracking()
+            .SingleOrDefaultAsync(item => item.ServiceClientId == serviceClientId, cancellationToken);
+        return grant is null
+            ? null
+            : new ServiceClientGrant(
+                grant.Scopes.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries),
+                grant.CollectionId,
+                grant.Version);
+    }
+
     public void Add(ServiceClient serviceClient, ClientCredential credential)
     {
         context.ServiceClients.Add(serviceClient);
