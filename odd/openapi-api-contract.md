@@ -176,15 +176,19 @@ The finding that shaped this unit: **`Accepts<T>` is not document-only metadata.
 
 Verified independently: 18 paths, 20 operations with unique ids, exactly one plane tag each, every declared 2xx set matching its handler, the eight request bodies with their content types, and no `415` or `429` declared yet. Suite: 803 passed, 0 failed. Residual gap recorded for the next half: the path helpers in the test class recognise only `get`, `post`, `put`, `delete` and `patch`, so a `HEAD`, `OPTIONS` or `TRACE` verb added to a documented path would go uninspected.
 
-Settle during U3: whether the two health-check routes get documented at all given their payload is not JSON, and whether `info.version` should track `Directory.Build.props` (`0.1.0-rc.1`) instead of the `1.0.0` default `AddOpenApi` produces.
+U3b closed in three more commits. `dc71296` declared the non-success responses of all 20 operations, each traced to a named exception or return, and separated the two `415` shapes (the endpoints' own `application/problem+json` versus the framework's bodyless rejection of a bound body). Independent verification then found the matrix over-declaring a `403` on the nine admin operations — the admin policy only requires an authenticated user, so no path produces it — and mis-shaping the authentication responses; `3a0d58d` fixed both, corrected a false assumption of mine (the rate limiter does **not** set `Retry-After`; only the historical quota and watermark paths do), and turned the two multi-shape statuses into descriptions that name both branches. `38f77bc` added the `Retry-After: 1` that four admin `409` conflicts write through `AdminProblem.Create`, and tightened the assertion to exact `(operation, status)` pairs.
 
-**Review workload:** U3a landed as one 420-line additive commit (two new files plus one line in `Program.cs`); U3b adds metadata to 20 operations plus tests, so it is the larger of the two and the natural second PR if task 6 wants the slice split. U2's 168-line commit and U1's 256-line test commit are each reviewable on their own.
+Two limits worth keeping in view. The shared admin `409` also covers conflicts with no retry hint, so its header description scopes the hint to the in-progress case: OpenAPI cannot express per-condition headers on one status. And the document is generated from a variant of the app — the generation environment enables the two configuration gates and declares the request bodies that production does not enforce through `Accepts<T>` — so it describes the contract, not the wiring of a given host.
+
+Settled during U3. The two health-check routes stay out of `paths`: `ApiExplorer` skips `MapHealthChecks` endpoints unless routing metadata is added, and the metadata that works also narrows them to GET, so they are named in `info.description` as plain-text anonymous probes and a test asserts exactly that. `info.version` now tracks the assembly's informational version (`0.1.0-rc.1`), the same value `GET /api/v1/health` reports, instead of the `1.0.0` default `AddOpenApi` produces.
+
+**Review workload:** task 3 landed as eight commits — U1 pins (256 lines of tests), U2 DTOs (168), U3a contract and security (420), U3b-1 identity and success contracts (336), U3b-2 the problem matrix (478), U3b-3 the authentication accuracy fix (~180), U3b-4 the admin retry hints (36) and their records. U3b-2 and U3a are the two that exceed the plan's 400-line budget on their own; if task 6 wants a smaller review, U3b-2 is the natural second PR.
 
 ## Tasks
 
 - [x] 1. Establish whether the document can be generated without PostgreSQL, and record the finding.
 - [x] 2. Add `Microsoft.AspNetCore.OpenApi` and build-time generation to `Rag.Api`.
-- [ ] 3. Generate the document and review it against the three planes: every route present, request and response
+- [x] 3. Generate the document and review it against the three planes: every route present, request and response
   schemas resolved, the historical flag caveat stated, and security schemes matching what the code enforces.
 - [ ] 4. Commit the generated document under `docs/api/` and add the publisher script.
 - [ ] 5. Publish it next to `TAREAS.md` and verify the read-back through the mount.
