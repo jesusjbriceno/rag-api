@@ -59,20 +59,17 @@ public static class HistoricalUploadEndpoints
                     value.Format,
                     value.SourceRootAlias),
                 cancellationToken);
-            return Results.Json(new
-            {
-                upload_id = result.UploadId,
-                state = HistoricalEndpointSupport.ToStateString(result.State),
-                correlation_id = result.CorrelationId,
-                created = result.Created,
-                accepted_limits = new
-                {
-                    max_normalized_text_bytes = result.MaxNormalizedTextBytes,
-                    per_client_pending_quota = result.PerClientPendingQuota,
-                    total_storage_watermark_bytes = result.TotalStorageWatermarkBytes,
-                    abandoned_upload_expiry = result.AbandonedUploadExpiry,
-                },
-            }, statusCode: result.Created ? StatusCodes.Status201Created : StatusCodes.Status200OK);
+            return Results.Json(new ReserveHistoricalUploadResponse(
+                result.UploadId,
+                HistoricalEndpointSupport.ToStateString(result.State),
+                result.CorrelationId,
+                result.Created,
+                new HistoricalUploadLimits(
+                    result.MaxNormalizedTextBytes,
+                    result.PerClientPendingQuota,
+                    result.TotalStorageWatermarkBytes,
+                    result.AbandonedUploadExpiry)),
+                statusCode: result.Created ? StatusCodes.Status201Created : StatusCodes.Status200OK);
         }
         catch (Exception exception) when (HistoricalEndpointSupport.TryMap(exception, context, out var mapped))
         {
@@ -98,14 +95,12 @@ public static class HistoricalUploadEndpoints
                 ApiEndpointSupport.GetClientId(context.User),
                 context.Request.Body,
                 cancellationToken);
-            return Results.Ok(new
-            {
-                upload_id = result.UploadId,
-                state = HistoricalEndpointSupport.ToStateString(result.State),
-                declared_bytes = result.DeclaredBytes,
-                observed_bytes = result.ObservedBytes,
-                normalized_text_sha256 = result.NormalizedTextSha256,
-            });
+            return Results.Ok(new PublishedHistoricalUploadResponse(
+                result.UploadId,
+                HistoricalEndpointSupport.ToStateString(result.State),
+                result.DeclaredBytes,
+                result.ObservedBytes,
+                result.NormalizedTextSha256));
         }
         catch (Exception exception) when (HistoricalEndpointSupport.TryMap(exception, context, out var mapped))
         {
@@ -125,14 +120,12 @@ public static class HistoricalUploadEndpoints
                 uploadId,
                 ApiEndpointSupport.GetClientId(context.User),
                 cancellationToken);
-            return Results.Ok(new
-            {
-                upload_id = result.UploadId,
-                document_id = result.DocumentId,
-                document_version_id = result.DocumentVersionId,
-                operation_id = result.OperationId,
-                state = HistoricalEndpointSupport.ToStateString(result.State),
-            });
+            return Results.Ok(new CommitHistoricalUploadResponse(
+                result.UploadId,
+                result.DocumentId,
+                result.DocumentVersionId,
+                result.OperationId,
+                HistoricalEndpointSupport.ToStateString(result.State)));
         }
         catch (Exception exception) when (HistoricalEndpointSupport.TryMap(exception, context, out var mapped))
         {
@@ -152,18 +145,16 @@ public static class HistoricalUploadEndpoints
                 uploadId,
                 ApiEndpointSupport.GetClientId(context.User),
                 cancellationToken);
-            return Results.Ok(new
-            {
-                upload_id = result.UploadId,
-                state = HistoricalEndpointSupport.ToStateString(result.State),
-                source_document_key = result.SourceDocumentKey,
-                normalized_text_sha256 = result.NormalizedTextSha256,
-                declared_bytes = result.DeclaredBytes,
-                document_id = result.DocumentId,
-                document_version_id = result.DocumentVersionId,
-                operation_id = result.OperationId,
-                correlation_id = result.CorrelationId,
-            });
+            return Results.Ok(new HistoricalUploadStatusResponse(
+                result.UploadId,
+                HistoricalEndpointSupport.ToStateString(result.State),
+                result.SourceDocumentKey,
+                result.NormalizedTextSha256,
+                result.DeclaredBytes,
+                result.DocumentId,
+                result.DocumentVersionId,
+                result.OperationId,
+                result.CorrelationId));
         }
         catch (Exception exception) when (HistoricalEndpointSupport.TryMap(exception, context, out var mapped))
         {

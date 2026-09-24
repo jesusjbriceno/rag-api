@@ -24,23 +24,21 @@ public static class HistoricalOperationEndpoints
                 collectionId,
                 operationId,
                 cancellationToken);
-            return Results.Ok(new
-            {
-                id = result.Id,
-                status = result.Status.ToString().ToLowerInvariant(),
-                failure_stage = result.FailureStage,
-                failure_code = result.FailureCode,
-                created_at = result.CreatedAt,
-                started_at = result.StartedAt,
-                completed_at = result.CompletedAt,
-                queue_wait = result.QueueWait,
-                chunk_count = result.ChunkCount,
-                chunking_duration = result.ChunkingDuration,
-                embedding_calls = result.EmbeddingCalls,
-                embedding_duration = result.EmbeddingDuration,
-                indexing_duration = result.IndexingDuration,
-                terminal_state = result.TerminalState?.ToString().ToLowerInvariant(),
-            });
+            return Results.Ok(new HistoricalOperationTelemetryResponse(
+                result.Id,
+                result.Status.ToString().ToLowerInvariant(),
+                result.FailureStage,
+                result.FailureCode,
+                result.CreatedAt,
+                result.StartedAt,
+                result.CompletedAt,
+                result.QueueWait,
+                result.ChunkCount,
+                result.ChunkingDuration,
+                result.EmbeddingCalls,
+                result.EmbeddingDuration,
+                result.IndexingDuration,
+                result.TerminalState?.ToString().ToLowerInvariant()));
         }
         catch (Exception exception) when (HistoricalEndpointSupport.TryMap(exception, context, out var mapped))
         {

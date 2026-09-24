@@ -215,6 +215,28 @@ public sealed class ProtectedApiTests(PostgreSqlFixture fixture) : IAsyncLifetim
         Assert.Equal(HttpStatusCode.Forbidden, denied.StatusCode);
     }
 
+    [Fact]
+    public async Task Historical_scoped_token_body_pins_the_token_key_set()
+    {
+        using var enabledFactory = new ProtectedApiFactory(fixture.ConnectionString, _contentRoot, enableHistoricalIngestion: true);
+        using var enabledClient = enabledFactory.CreateClient();
+        var historical = await CreateHistoricalClientAsync(enabledFactory);
+
+        var exchange = await enabledClient.PostAsJsonAsync("/api/v1/auth/token", new
+        {
+            keyId = historical.KeyId,
+            secret = historical.Secret,
+            scope = $"{HistoricalScopes.UploadsWrite} {HistoricalScopes.OperationsRead}",
+        });
+
+        Assert.Equal(HttpStatusCode.OK, exchange.StatusCode);
+        using var document = JsonDocument.Parse(await exchange.Content.ReadAsStringAsync());
+        var body = document.RootElement;
+        Assert.Equal(Keys("access_token", "token_type", "expires_in", "scope"), PropertyNames(body));
+        Assert.Equal("Bearer", body.GetProperty("token_type").GetString());
+        Assert.Contains(HistoricalScopes.UploadsWrite, body.GetProperty("scope").GetString(), StringComparison.Ordinal);
+    }
+
     private async Task<HistoricalClient> CreateHistoricalClientAsync(ProtectedApiFactory factory)
     {
         using var scope = factory.Services.CreateScope();

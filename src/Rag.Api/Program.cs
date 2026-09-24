@@ -145,7 +145,7 @@ var informationalVersion = typeof(Program).Assembly
     .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
     ?? "unknown";
 
-app.MapGet("/api/v1/health", () => Results.Ok(new { status = "healthy", version = informationalVersion })).AllowAnonymous();
+app.MapGet("/api/v1/health", () => Results.Ok(new HealthResponse("healthy", informationalVersion))).AllowAnonymous();
 app.MapPost("/api/v1/auth/token", async (TokenExchangeRequest request, CredentialExchangeHandler handler, CancellationToken cancellationToken) =>
     {
         var result = await handler.ExchangeScopedAsync(request.KeyId, request.Secret, request.Scope, cancellationToken);
@@ -153,8 +153,8 @@ app.MapPost("/api/v1/auth/token", async (TokenExchangeRequest request, Credentia
         {
             TokenExchangeOutcome.Unauthorized => Results.Problem(statusCode: StatusCodes.Status401Unauthorized, title: "Unauthorized"),
             TokenExchangeOutcome.InvalidScope => Results.Problem(statusCode: StatusCodes.Status400BadRequest, title: "invalid_scope"),
-            _ when result.Token!.Scope is null => Results.Ok(new { access_token = result.Token.Value, token_type = "Bearer", expires_in = 900 }),
-            _ => Results.Ok(new { access_token = result.Token!.Value, token_type = "Bearer", expires_in = 900, scope = result.Token.Scope }),
+            _ when result.Token!.Scope is null => Results.Ok(new TokenResponse(result.Token.Value, "Bearer", 900, null)),
+            _ => Results.Ok(new TokenResponse(result.Token!.Value, "Bearer", 900, result.Token.Scope)),
         };
     })
     .AllowAnonymous()
@@ -202,7 +202,7 @@ app.MapPost("/api/v1/collections/{collectionId:guid}/ingestions:txt", async (
                     payload.Value.ExternalReference),
                 cancellationToken);
             return Results.Json(
-                new { document_id = result.DocumentId, document_version_id = result.DocumentVersionId, operation_id = result.OperationId },
+                new TxtIngestionResponse(result.DocumentId, result.DocumentVersionId, result.OperationId),
                 statusCode: result.IsDuplicate ? StatusCodes.Status200OK : StatusCodes.Status202Accepted);
         }
         catch (ResourceNotFoundException)
@@ -225,15 +225,13 @@ app.MapGet("/api/v1/collections/{collectionId:guid}/operations/{operationId:guid
         try
         {
             var operation = await handler.HandleAsync(ApiEndpointSupport.GetClientId(context.User), collectionId, operationId, cancellationToken);
-            return Results.Ok(new
-            {
-                id = operation.Id,
-                status = operation.Status.ToString().ToLowerInvariant(),
-                created_at = operation.CreatedAt,
-                started_at = operation.StartedAt,
-                completed_at = operation.CompletedAt,
-                failure_stage = operation.FailureStage,
-            });
+            return Results.Ok(new OperationStatusResponse(
+                operation.Id,
+                operation.Status.ToString().ToLowerInvariant(),
+                operation.CreatedAt,
+                operation.StartedAt,
+                operation.CompletedAt,
+                operation.FailureStage));
         }
         catch (ResourceNotFoundException)
         {
