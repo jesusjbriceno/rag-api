@@ -59,7 +59,8 @@ definitions:
 
 1. **Generation without PostgreSQL.** Build-time generation starts the app host to discover endpoints. If
    startup demands a database connection, the generation pass needs a configuration that avoids it. Establish
-   this first: it decides whether build-time generation is viable at all.
+   this first: it decides whether build-time generation is viable at all. → **Resolved**: see
+   “Task 1 finding” below. The database is *not* the blocker; startup option validation is.
 2. **The historical flag ships off.** `src/Rag.Api/appsettings.json` carries
    `"HistoricalIngestion": { "Enabled": false }`. The routes exist but are gated off by default. Decide whether
    the generated document includes them (it should, so consumers can implement) and make sure the document says
@@ -72,9 +73,59 @@ definitions:
    plus a script and docs. Keep it one small, single-purpose PR; do not bundle it with Unit 11.
 5. **`actionlint` is not installed** on this machine, so if any workflow changes, CI is the only lint.
 
+## Task 1 finding — the generation pass needs a host start, not PostgreSQL
+
+Probed on 2026-09-24 with `Microsoft.AspNetCore.OpenApi` 10.0.1 and `Microsoft.Extensions.ApiDescription.Server`
+10.0.1 wired experimentally into `Rag.Api` (`builder.Services.AddOpenApi()`,
+`<OpenApiGenerateDocumentsOnBuild>true</OpenApiGenerateDocumentsOnBuild>`,
+`<OpenApiDocumentsDirectory>$(MSBuildProjectDirectory)/../../docs/api</OpenApiDocumentsDirectory>`).
+
+**The generation pass does start the application host.** `dotnet-getdocument` launches `Rag.Api.dll`, and
+`Host.StartAsync` runs: `ValidateOnStart` option validation executes and hosted services start.
+
+| Probe | Configuration | Result |
+| --- | --- | --- |
+| A | committed config, PostgreSQL unreachable (`127.0.0.1:45999`) | **build failed**, exit 1: `Hosting failed to start` / `OptionsValidationException: JWT authentication configuration is invalid.`, stack ending in `StartupValidator.Validate()` → `Host.StartAsync`. No document written. |
+| B | A plus a throwaway RSA keypair in `Jwt__*` environment variables | **build succeeded**, exit 0: `Generating document named 'v1'.` → `docs/api/Rag.Api.json`, 3019 bytes, sha256 `af9d9c4354725e2f1135c6fae0bb26b84450dc2ed7c394dad8f5b67d27cd3c27`. |
+| C | B with the target forced (`rm src/Rag.Api/obj/Rag.Api.OpenApiFiles.cache`) | build succeeded, byte-identical document, and **exactly one TCP connection arrived on the PostgreSQL port**: `OperationWorker` polls the database while the document is generated. Its failure is swallowed (`catch` → `LogError` → retry), so generation still exits 0. |
+
+Reproduce: `ConnectionStrings__Rag='Host=127.0.0.1;Port=45999;Database=rag;Username=rag;Password=rag;Timeout=2'`
+plus the four `Jwt__CurrentSigningKey__*` / `Jwt__ValidationKeys__0__*` variables, then
+`dotnet build src/Rag.Api/Rag.Api.csproj -v n`.
+
+Task 1 work-unit commit: `0071cde` — this record only. The experimental wiring used by the probes
+(`Directory.Packages.props`, `src/Rag.Api/Rag.Api.csproj`, `src/Rag.Api/Program.cs`) is deliberately **not** in
+that commit; task 2 owns it, because its shape depends on the generation-time configuration this finding demands.
+
+What the rest of the plan has to absorb:
+
+1. **PostgreSQL is not required to generate the document.** A build host with no database succeeds; a *hanging*
+   host would only add connect-timeout latency to the build. Risk 1 is resolved in favour of “no DB needed”.
+2. **JWT key material is required**, because the host starts. `appsettings.json` carries no
+   `Jwt:CurrentSigningKey`/`ValidationKeys`, so this wiring fails every `dotnet build` that includes
+   `Rag.Api` — `dotnet build Rag.sln` in `ci-pr`, `ci-develop` and `ci-release` (no JWT secrets in CI) and any
+   test project that pulls the API in. Task 2 must land the generation-time configuration *in the same slice*, or
+   the branch breaks CI.
+3. **Hosted services run during generation.** The worker's database poll is non-fatal but is real side traffic;
+   the generation configuration should keep DB-dependent wiring out instead of relying on swallowed failures.
+4. **Generation is incremental.** `GenerateOpenApiDocuments` declares `Inputs="$(TargetPath)"
+   Outputs="obj/Rag.Api.OpenApiFiles.cache"`: deleting `docs/api/Rag.Api.json` alone does **not** regenerate it
+   (probe C required removing the cache file). A publisher or a reviewer cannot trust the absence of a diff — the
+   target must be forced.
+5. **Committed config yields a public-plane-only document** (6 paths). `AdminPlane:Enabled` is absent/false and
+   `HistoricalIngestion:Enabled` is `false`, so `HistoricalEndpointExtensions` returns before mapping (line 83)
+   and neither the admin nor the historical routes reach the document. Enabling `AdminPlane:Enabled` for generation
+   also activates four more `ValidateOnStart` validators (assertion key ring, app auth, audit, operations) that need
+   key material. A three-plane document therefore needs a generation-only configuration; that is task 2's first
+   move and task 3 confirms the result.
+6. **Version note.** `Microsoft.AspNetCore.OpenApi` 10.0.1 pulls transitive `Microsoft.OpenApi` 2.0.0, which raises
+   NU1903 (GHSA-v5pm-xwqc-g5wc, high) and adds two warnings to an otherwise clean build. CI does not use
+   `-warnaserror` (`Directory.Build.props` and the workflows were checked), so it is not fatal today; task 2 should
+   either move to 10.0.12 (the installed runtime) or pin the transitive package.
+
 ## Tasks
 
-- [ ] 1. Establish whether the document can be generated without PostgreSQL, and record the finding.
+- [x] 1. Establish whether the document can be generated without PostgreSQL, and record the finding.
 - [ ] 2. Add `Microsoft.AspNetCore.OpenApi` and build-time generation to `Rag.Api`.
 - [ ] 3. Generate the document and review it against the three planes: every route present, request and response
   schemas resolved, the historical flag caveat stated, and security schemes matching what the code enforces.
