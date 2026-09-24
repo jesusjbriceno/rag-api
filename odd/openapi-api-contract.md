@@ -190,7 +190,7 @@ Settled during U3. The two health-check routes stay out of `paths`: `ApiExplorer
 - [x] 2. Add `Microsoft.AspNetCore.OpenApi` and build-time generation to `Rag.Api`.
 - [x] 3. Generate the document and review it against the three planes: every route present, request and response
   schemas resolved, the historical flag caveat stated, and security schemes matching what the code enforces.
-- [ ] 4. Commit the generated document under `docs/api/` and add the publisher script.
+- [x] 4. Commit the generated document under `docs/api/` and add the publisher script. — artifact committed from the current contract; publisher in `scripts/publish-openapi-contract.py`.
 - [ ] 5. Publish it next to `TAREAS.md` and verify the read-back through the mount.
 - [ ] 6. Open the PR (or direct push — the maintainer's call) and record the evidence.
 
