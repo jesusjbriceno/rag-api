@@ -145,7 +145,10 @@ var informationalVersion = typeof(Program).Assembly
     .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
     ?? "unknown";
 
-app.MapGet("/api/v1/health", () => Results.Ok(new HealthResponse("healthy", informationalVersion))).AllowAnonymous();
+app.MapGet("/api/v1/health", () => Results.Ok(new HealthResponse("healthy", informationalVersion)))
+    .WithName("get_health")
+    .Produces<HealthResponse>(StatusCodes.Status200OK)
+    .AllowAnonymous();
 app.MapPost("/api/v1/auth/token", async (TokenExchangeRequest request, CredentialExchangeHandler handler, CancellationToken cancellationToken) =>
     {
         var result = await handler.ExchangeScopedAsync(request.KeyId, request.Secret, request.Scope, cancellationToken);
@@ -157,6 +160,9 @@ app.MapPost("/api/v1/auth/token", async (TokenExchangeRequest request, Credentia
             _ => Results.Ok(new TokenResponse(result.Token!.Value, "Bearer", 900, result.Token.Scope)),
         };
     })
+    .WithName("exchange_token")
+    .DeclaresBody<TokenExchangeRequest>("application/json", openApiGeneration)
+    .Produces<TokenResponse>(StatusCodes.Status200OK)
     .AllowAnonymous()
     .RequireRateLimiting("credential-exchange");
 
@@ -177,7 +183,10 @@ app.MapPost("/api/v1/collections", async (HttpContext context, CreateCollectionH
         {
             return ApiEndpointSupport.InvalidInput();
         }
-    });
+    })
+    .WithName("create_collection")
+    .DeclaresBody<CreateCollectionRequest>("application/json", openApiGeneration)
+    .Produces<CollectionRepresentation>(StatusCodes.Status201Created);
 
 app.MapPost("/api/v1/collections/{collectionId:guid}/ingestions:txt", async (
     Guid collectionId,
@@ -213,7 +222,11 @@ app.MapPost("/api/v1/collections/{collectionId:guid}/ingestions:txt", async (
         {
             return ApiEndpointSupport.InvalidInput();
         }
-    });
+    })
+    .WithName("accept_txt_ingestion")
+    .DeclaresBody<TxtIngestionRequest>("application/json", openApiGeneration)
+    .Produces<TxtIngestionResponse>(StatusCodes.Status202Accepted)
+    .Produces<TxtIngestionResponse>(StatusCodes.Status200OK);
 
 app.MapGet("/api/v1/collections/{collectionId:guid}/operations/{operationId:guid}", async (
     Guid collectionId,
@@ -237,7 +250,9 @@ app.MapGet("/api/v1/collections/{collectionId:guid}/operations/{operationId:guid
         {
             return ApiEndpointSupport.NotFound();
         }
-    });
+    })
+    .WithName("get_operation_status")
+    .Produces<OperationStatusResponse>(StatusCodes.Status200OK);
 
 app.MapPost("/api/v1/retrieval:search", async (HttpContext context, SemanticRetrievalHandler handler, CancellationToken cancellationToken) =>
     {
@@ -270,7 +285,10 @@ app.MapPost("/api/v1/retrieval:search", async (HttpContext context, SemanticRetr
         {
             return ApiEndpointSupport.InvalidInput();
         }
-    });
+    })
+    .WithName("retrieval_search")
+    .DeclaresBody<RetrievalSearchRequest>("application/json", openApiGeneration)
+    .Produces<IReadOnlyList<SemanticRetrievalMatch>>(StatusCodes.Status200OK);
 
 if (builder.Configuration.GetValue<bool>("AdminPlane:Enabled"))
 {

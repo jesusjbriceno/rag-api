@@ -73,19 +73,30 @@ public sealed class OpenApiContractTests(OpenApiGenerationFactory generation) : 
     }
 
     [Fact]
-    public void Every_referenced_security_scheme_is_declared()
+    public void Every_declared_security_scheme_is_referenced_and_every_referenced_scheme_is_declared()
     {
         var schemes = Document["components"]?["securitySchemes"]?.AsObject();
         Assert.NotNull(schemes);
+        Assert.Equal(AdminHeaderSchemes.Length + 1, schemes!.Count);
 
         foreach (var expected in AdminHeaderSchemes.Append(BearerScheme))
         {
-            Assert.True(schemes!.ContainsKey(expected), $"securitySchemes is missing '{expected}'.");
+            Assert.True(schemes.ContainsKey(expected), $"securitySchemes is missing '{expected}'.");
         }
 
-        foreach (var referenced in Operations(Document).SelectMany(entry => SecuritySchemeNames(entry.Operation)).Distinct(StringComparer.Ordinal))
+        var referenced = Operations(Document)
+            .SelectMany(entry => SecuritySchemeNames(entry.Operation))
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+
+        foreach (var declared in schemes.Select(scheme => scheme.Key))
         {
-            Assert.True(schemes!.ContainsKey(referenced), $"An operation references the undeclared scheme '{referenced}'.");
+            Assert.Contains(declared, referenced);
+        }
+
+        foreach (var reference in referenced)
+        {
+            Assert.True(schemes.ContainsKey(reference), $"An operation references the undeclared scheme '{reference}'.");
         }
     }
 
@@ -94,7 +105,9 @@ public sealed class OpenApiContractTests(OpenApiGenerationFactory generation) : 
     {
         foreach (var path in AnonymousPaths)
         {
-            foreach (var operation in OperationsForPath(Document, path))
+            var operations = OperationsForPath(Document, path);
+            Assert.NotEmpty(operations);
+            foreach (var operation in operations)
             {
                 Assert.Null(operation["security"]);
             }
@@ -106,7 +119,7 @@ public sealed class OpenApiContractTests(OpenApiGenerationFactory generation) : 
     {
         var admin = Operations(Document).Where(entry => entry.Path.StartsWith("/api/v1/admin/", StringComparison.Ordinal)).ToArray();
 
-        Assert.NotEmpty(admin);
+        Assert.Equal(9, admin.Length);
         foreach (var (_, _, operation) in admin)
         {
             var requirement = Assert.Single(SecurityRequirements(operation));
@@ -128,10 +141,13 @@ public sealed class OpenApiContractTests(OpenApiGenerationFactory generation) : 
     [InlineData("/api/v1/historical/collections/{collectionId}/operations/{operationId}", "historical:operations.read")]
     public void Historical_operations_require_bearer_and_state_their_exact_scope(string path, string scope)
     {
-        var operation = Operation(Document, path);
-        Assert.NotNull(operation);
-        Assert.Equal([[BearerScheme]], SecurityRequirements(operation));
-        Assert.Contains(scope, operation!["description"]?.GetValue<string>() ?? string.Empty, StringComparison.Ordinal);
+        var operations = OperationsForPath(Document, path);
+        Assert.NotEmpty(operations);
+        foreach (var operation in operations)
+        {
+            Assert.Equal([[BearerScheme]], SecurityRequirements(operation));
+            Assert.Contains(scope, operation["description"]?.GetValue<string>() ?? string.Empty, StringComparison.Ordinal);
+        }
     }
 
     [Fact]
@@ -183,6 +199,105 @@ public sealed class OpenApiContractTests(OpenApiGenerationFactory generation) : 
         Assert.Contains("anonymous", description, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Fact]
+    public void The_document_publishes_twenty_operations_over_eighteen_paths_with_unique_operation_ids()
+    {
+        var paths = Document["paths"]?.AsObject();
+        Assert.NotNull(paths);
+        Assert.Equal(18, paths!.Count);
+
+        var operations = Operations(Document).ToArray();
+        Assert.Equal(20, operations.Length);
+
+        var operationIds = operations.Select(entry => entry.Operation["operationId"]?.GetValue<string>()).ToArray();
+        Assert.All(operationIds, operationId => Assert.False(string.IsNullOrWhiteSpace(operationId), "Every operation needs an operationId."));
+        Assert.Equal(operationIds.Length, operationIds.Distinct(StringComparer.Ordinal).Count());
+        Assert.All(operationIds, operationId => Assert.Matches("^[a-z][a-z0-9_]*$", operationId!));
+    }
+
+    [Fact]
+    public void Every_operation_carries_exactly_one_plane_tag_and_no_class_name_tag_survives()
+    {
+        string[] planeTags = ["Public", "Admin", "Historical"];
+        var used = new List<string>();
+        foreach (var (path, method, operation) in Operations(Document))
+        {
+            var tags = operation["tags"]?.AsArray().Select(tag => tag?.GetValue<string>() ?? string.Empty).ToArray() ?? [];
+            Assert.True(tags.Length == 1, $"{method.ToUpperInvariant()} {path} must carry exactly one tag.");
+            Assert.Contains(tags[0], planeTags);
+            used.Add(tags[0]);
+        }
+
+        Assert.Equal(planeTags.Order(StringComparer.Ordinal), used.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal));
+
+        var declared = Document["tags"]?.AsArray()
+            .Select(tag => tag?["name"]?.GetValue<string>() ?? string.Empty)
+            .ToArray() ?? [];
+        Assert.Equal(planeTags.Order(StringComparer.Ordinal), declared.Order(StringComparer.Ordinal));
+        Assert.DoesNotContain(declared, tag => tag.Contains("Endpoints", StringComparison.Ordinal) || tag.StartsWith("Rag.", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData("/api/v1/health", "get", "200", "HealthResponse")]
+    [InlineData("/api/v1/auth/token", "post", "200", "TokenResponse")]
+    [InlineData("/api/v1/collections", "post", "201", "CollectionRepresentation")]
+    [InlineData("/api/v1/collections/{collectionId}/ingestions:txt", "post", "200,202", "TxtIngestionResponse")]
+    [InlineData("/api/v1/collections/{collectionId}/operations/{operationId}", "get", "200", "OperationStatusResponse")]
+    [InlineData("/api/v1/retrieval:search", "post", "200", "SemanticRetrievalMatch")]
+    [InlineData("/api/v1/admin/clients", "post", "200,201", "AdminClientMetadata")]
+    [InlineData("/api/v1/admin/clients", "get", "200", "AdminClientPage")]
+    [InlineData("/api/v1/admin/clients/{clientId}", "get", "200", "AdminClientDetail")]
+    [InlineData("/api/v1/admin/clients/{clientId}/credentials", "post", "201", "AdminCredentialDelivery")]
+    [InlineData("/api/v1/admin/clients/{clientId}/credentials", "get", "200", "AdminCredentialMetadata")]
+    [InlineData("/api/v1/admin/credentials/{credentialId}", "get", "200", "AdminCredentialMetadata")]
+    [InlineData("/api/v1/admin/credentials/{credentialId}/rotate", "post", "200", "AdminCredentialDelivery")]
+    [InlineData("/api/v1/admin/credentials/{credentialId}/revoke", "post", "200", "AdminCredentialMetadata")]
+    [InlineData("/api/v1/admin/audit", "get", "200", "AdminAuditPage")]
+    [InlineData("/api/v1/historical/collections/{collectionId}/uploads", "post", "200,201", "ReserveHistoricalUploadResponse")]
+    [InlineData("/api/v1/historical/uploads/{uploadId}/content", "put", "200", "PublishedHistoricalUploadResponse")]
+    [InlineData("/api/v1/historical/uploads/{uploadId}:commit", "post", "200", "CommitHistoricalUploadResponse")]
+    [InlineData("/api/v1/historical/uploads/{uploadId}", "get", "200", "HistoricalUploadStatusResponse")]
+    [InlineData("/api/v1/historical/collections/{collectionId}/operations/{operationId}", "get", "200", "HistoricalOperationTelemetryResponse")]
+    public void Every_operation_states_its_real_success_contract(string path, string method, string successCodes, string schemaType)
+    {
+        var operation = OperationFor(Document, path, method);
+        Assert.NotNull(operation);
+        var responses = operation!["responses"]?.AsObject();
+        Assert.NotNull(responses);
+
+        var declared = responses!.Select(response => response.Key)
+            .Where(code => code.StartsWith('2'))
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+        var expected = successCodes.Split(',').Order(StringComparer.Ordinal).ToArray();
+        Assert.Equal(expected, declared);
+
+        foreach (var code in expected)
+        {
+            Assert.True(responses.ContainsKey(code), $"{method.ToUpperInvariant()} {path} must declare {code}.");
+            Assert.Contains(schemaType, SchemaNames(responses[code]?["content"]));
+        }
+    }
+
+    [Theory]
+    [InlineData("/api/v1/auth/token", "post", "application/json", "TokenExchangeRequest")]
+    [InlineData("/api/v1/collections", "post", "application/json", "CreateCollectionRequest")]
+    [InlineData("/api/v1/collections/{collectionId}/ingestions:txt", "post", "application/json", "TxtIngestionRequest")]
+    [InlineData("/api/v1/retrieval:search", "post", "application/json", "RetrievalSearchRequest")]
+    [InlineData("/api/v1/admin/clients", "post", "application/json", "AdminCreateClientRequest")]
+    [InlineData("/api/v1/admin/clients/{clientId}/credentials", "post", "application/json", "AdminIssueCredentialRequest")]
+    [InlineData("/api/v1/historical/collections/{collectionId}/uploads", "post", "application/json", "ReserveHistoricalUploadRequest")]
+    [InlineData("/api/v1/historical/uploads/{uploadId}/content", "put", "text/plain", "string")]
+    public void Declared_request_bodies_state_their_content_type_and_schema(string path, string method, string contentType, string schemaType)
+    {
+        var operation = OperationFor(Document, path, method);
+        Assert.NotNull(operation);
+        var content = operation!["requestBody"]?["content"]?.AsObject();
+        Assert.NotNull(content);
+        Assert.True(content!.ContainsKey(contentType), $"{method.ToUpperInvariant()} {path} must declare a {contentType} request body.");
+        Assert.Contains(schemaType, SchemaNames(content));
+    }
+
     private static IReadOnlyList<IReadOnlyList<string>> SecurityRequirements(JsonNode operation) =>
         operation["security"]?.AsArray()
             .Select(requirement => (IReadOnlyList<string>)requirement!.AsObject().Select(property => property.Key).Order(StringComparer.Ordinal).ToArray())
@@ -191,19 +306,20 @@ public sealed class OpenApiContractTests(OpenApiGenerationFactory generation) : 
     private static IReadOnlyList<string> SecuritySchemeNames(JsonNode operation) =>
         SecurityRequirements(operation).SelectMany(requirement => requirement).ToArray();
 
-    private static JsonNode? Operation(JsonNode document, string path)
+    private static IReadOnlyList<JsonNode> OperationsForPath(JsonNode document, string path)
     {
         var pathItem = document["paths"]?[path]?.AsObject();
         Assert.NotNull(pathItem);
-        var operation = pathItem!.FirstOrDefault(entry => entry.Key is "get" or "post" or "put" or "delete" or "patch");
-        Assert.NotEqual(default, operation);
-        return operation.Value;
+        return pathItem!.Where(entry => IsHttpMethod(entry.Key)).Select(entry => entry.Value!).ToArray();
     }
 
-    private static IReadOnlyList<JsonNode> OperationsForPath(JsonNode document, string path)
+    private static JsonNode? OperationFor(JsonNode document, string path, string method)
     {
-        var operation = Operation(document, path);
-        return operation is null ? [] : [operation];
+        var pathItem = document["paths"]?[path]?.AsObject();
+        Assert.NotNull(pathItem);
+        var operation = pathItem![method];
+        Assert.NotNull(operation);
+        return operation;
     }
 
     private static IEnumerable<(string Path, string Method, JsonNode Operation)> Operations(JsonNode document)
@@ -212,11 +328,52 @@ public sealed class OpenApiContractTests(OpenApiGenerationFactory generation) : 
         {
             foreach (var method in path.Value?.AsObject() ?? [])
             {
-                if (method.Key is "get" or "post" or "put" or "delete" or "patch")
+                if (IsHttpMethod(method.Key))
                 {
                     yield return (path.Key, method.Key, method.Value!);
                 }
             }
+        }
+    }
+
+    private static bool IsHttpMethod(string key) => key is "get" or "post" or "put" or "delete" or "patch";
+
+    private static IReadOnlyList<string> SchemaNames(JsonNode? content)
+    {
+        var names = new List<string>();
+        var mediaTypes = content?.AsObject();
+        if (mediaTypes is null)
+        {
+            return names;
+        }
+
+        foreach (var mediaType in mediaTypes)
+        {
+            CollectNames(mediaType.Value?["schema"], names);
+        }
+
+        return names;
+    }
+
+    private static void CollectNames(JsonNode? schema, List<string> names)
+    {
+        if (schema is null)
+        {
+            return;
+        }
+
+        if (schema["$ref"]?.GetValue<string>() is { } reference)
+        {
+            names.Add(reference[(reference.LastIndexOf('/') + 1)..]);
+        }
+        else if (schema["type"]?.GetValue<string>() is { } type)
+        {
+            names.Add(type);
+        }
+
+        if (schema["items"] is { } items)
+        {
+            CollectNames(items, names);
         }
     }
 }

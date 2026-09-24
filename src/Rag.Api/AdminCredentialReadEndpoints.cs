@@ -7,9 +7,16 @@ internal static class AdminCredentialReadEndpoints
 {
     public static void MapAdminCredentialReadEndpoints(this RouteGroupBuilder group)
     {
-        group.MapPost("/clients/{clientId:guid}/credentials", IssueCredentialAsync);
-        group.MapGet("/clients/{clientId:guid}/credentials", ListCredentialsAsync);
-        group.MapGet("/credentials/{credentialId:guid}", GetCredentialAsync);
+        group.MapPost("/clients/{clientId:guid}/credentials", IssueCredentialAsync)
+            .WithName("issue_credential")
+            .DeclaresBody<AdminIssueCredentialRequest>("application/json", group.IsOpenApiGeneration())
+            .Produces<AdminCredentialDelivery>(StatusCodes.Status201Created);
+        group.MapGet("/clients/{clientId:guid}/credentials", ListCredentialsAsync)
+            .WithName("list_credentials")
+            .Produces<IReadOnlyList<AdminCredentialMetadata>>(StatusCodes.Status200OK);
+        group.MapGet("/credentials/{credentialId:guid}", GetCredentialAsync)
+            .WithName("get_credential")
+            .Produces<AdminCredentialMetadata>(StatusCodes.Status200OK);
     }
 
     private static async Task<IResult> IssueCredentialAsync(

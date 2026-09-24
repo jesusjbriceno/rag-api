@@ -10,22 +10,33 @@ public static class HistoricalUploadEndpoints
         endpoints.MapPost(
             "/api/v1/historical/collections/{collectionId:guid}/uploads",
             ReserveAsync)
+            .WithName("reserve_historical_upload")
+            .DeclaresBody<ReserveHistoricalUploadRequest>("application/json", endpoints.IsOpenApiGeneration())
+            .Produces<ReserveHistoricalUploadResponse>(StatusCodes.Status201Created)
+            .Produces<ReserveHistoricalUploadResponse>(StatusCodes.Status200OK)
             .RequireAuthorization(HistoricalAuthorizationPolicies.UploadsWrite)
             .RequireRateLimiting(HistoricalRateLimitPolicies.Uploads);
 
         endpoints.MapPut(
             "/api/v1/historical/uploads/{uploadId:guid}/content",
             PublishContentAsync)
+            .WithName("publish_historical_upload_content")
+            .DeclaresBody<string>("text/plain", endpoints.IsOpenApiGeneration())
+            .Produces<PublishedHistoricalUploadResponse>(StatusCodes.Status200OK)
             .RequireAuthorization(HistoricalAuthorizationPolicies.UploadsWrite);
 
         endpoints.MapPost(
             "/api/v1/historical/uploads/{uploadId:guid}:commit",
             CommitAsync)
+            .WithName("commit_historical_upload")
+            .Produces<CommitHistoricalUploadResponse>(StatusCodes.Status200OK)
             .RequireAuthorization(HistoricalAuthorizationPolicies.UploadsWrite);
 
         endpoints.MapGet(
             "/api/v1/historical/uploads/{uploadId:guid}",
             GetAsync)
+            .WithName("get_historical_upload")
+            .Produces<HistoricalUploadStatusResponse>(StatusCodes.Status200OK)
             .RequireAuthorization(HistoricalAuthorizationPolicies.UploadsWrite);
     }
 

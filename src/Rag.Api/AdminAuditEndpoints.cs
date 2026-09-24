@@ -7,7 +7,9 @@ internal static class AdminAuditEndpoints
 {
     public static void MapAdminAuditEndpoints(this RouteGroupBuilder group)
     {
-        group.MapGet("/audit", ListAuditAsync);
+        group.MapGet("/audit", ListAuditAsync)
+            .WithName("list_audit")
+            .Produces<AdminAuditPage>(StatusCodes.Status200OK);
     }
 
     private static async Task<IResult> ListAuditAsync(

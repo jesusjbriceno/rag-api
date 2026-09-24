@@ -7,6 +7,8 @@ public static class HistoricalOperationEndpoints
         endpoints.MapGet(
             "/api/v1/historical/collections/{collectionId:guid}/operations/{operationId:guid}",
             GetAsync)
+            .WithName("get_historical_operation")
+            .Produces<HistoricalOperationTelemetryResponse>(StatusCodes.Status200OK)
             .RequireAuthorization(HistoricalAuthorizationPolicies.OperationsRead);
     }
 

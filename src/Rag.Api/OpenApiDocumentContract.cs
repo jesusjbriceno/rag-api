@@ -43,6 +43,20 @@ public static class OpenApiDocumentContract
     private const string AdminCanonicalString =
         "METHOD\nPathAndQuery\nBodyHash\nAssertionHash\nAppId\nKeyId\nTimestampUnixSeconds\nIdempotencyKey";
 
+    /// <summary>The three plane tags the document declares, in the order they describe the contract.</summary>
+    private static readonly (string Name, string Description)[] PlaneTagDescriptions =
+    [
+        (Public,
+            "Routes authenticated with a bearer JWT issued by POST /api/v1/auth/token, plus the anonymous " +
+            "health and token endpoints."),
+        (Admin,
+            "Configuration-gated machine-to-machine routes (AdminPlane:Enabled) authenticated with the six " +
+            "admin headers carrying an HMAC-SHA256 proof and an RS256 JWS assertion."),
+        (Historical,
+            "Configuration-gated historical ingestion and telemetry routes (HistoricalIngestion:Enabled) " +
+            "requiring a bearer JWT carrying the exact operation scope."),
+    ];
+
     private const string ContractDescription =
         "Routes are grouped in three authorization planes. The public plane authenticates with a bearer JWT " +
         "issued by POST /api/v1/auth/token and rejects tokens that carry a scope claim. The historical plane " +
@@ -60,6 +74,23 @@ public static class OpenApiDocumentContract
         options.AddOperationTransformer(DeclareOperationSecurity);
     }
 
+    /// <summary>
+    /// Declares the accepted body for the generated document only. <c>Accepts&lt;T&gt;</c> is <c>IAcceptsMetadata</c>,
+    /// and RequestDelegateFactory enforces the content type before the handler runs, which would replace these
+    /// endpoints' own problem+json 415 with a bodyless one. The generation pass declares the body; production keeps
+    /// its 415 contract.
+    /// </summary>
+    internal static RouteHandlerBuilder DeclaresBody<TRequest>(this RouteHandlerBuilder builder, string contentType, bool openApiGeneration) =>
+        openApiGeneration ? builder.Accepts<TRequest>(contentType) : builder;
+
+    /// <summary>
+    /// Resolves the generation flag for mapping code that cannot receive it as a parameter. It reports the same host
+    /// environment the application checks at startup, so the document and the endpoints always agree.
+    /// </summary>
+    internal static bool IsOpenApiGeneration(this IEndpointRouteBuilder endpoints) =>
+        endpoints.ServiceProvider.GetRequiredService<IWebHostEnvironment>()
+            .IsEnvironment(ApiEndpointSupport.OpenApiGenerationEnvironment);
+
     private static Task DeclareDocumentContract(
         OpenApiDocument document,
         OpenApiDocumentTransformerContext context,
@@ -67,6 +98,14 @@ public static class OpenApiDocumentContract
     {
         document.Info.Version = ResolveInformationalVersion();
         document.Info.Description = ContractDescription;
+
+        // The generator tags each operation with its declaring class; the document declares the three
+        // authorization planes instead, and every operation carries exactly one of them.
+        document.Tags = new HashSet<OpenApiTag>();
+        foreach (var (name, description) in PlaneTagDescriptions)
+        {
+            document.Tags.Add(new OpenApiTag { Name = name, Description = description });
+        }
 
         document.Components ??= new OpenApiComponents();
         document.Components.SecuritySchemes ??= new Dictionary<string, IOpenApiSecurityScheme>(StringComparer.Ordinal);
@@ -85,16 +124,23 @@ public static class OpenApiDocumentContract
         CancellationToken cancellationToken)
     {
         var metadata = EndpointMetadata(context);
-        if (metadata.OfType<IAllowAnonymous>().Any())
+        var anonymous = metadata.OfType<IAllowAnonymous>().Any();
+        var policy = anonymous
+            ? null
+            : metadata.OfType<IAuthorizeData>()
+                .Select(authorize => authorize.Policy)
+                .FirstOrDefault(policy => !string.IsNullOrEmpty(policy));
+
+        // Exactly one plane tag, assigned rather than appended so the tag the generator infers from the
+        // declaring class disappears. The plane is the same decision that selects the security below.
+        operation.Tags = new HashSet<OpenApiTagReference> { new(PlaneTag(policy), context.Document) };
+
+        if (anonymous)
         {
             // No requirement at all: omit the property so the operation does not inherit a global scheme.
             operation.Security = null;
             return Task.CompletedTask;
         }
-
-        var policy = metadata.OfType<IAuthorizeData>()
-            .Select(authorize => authorize.Policy)
-            .FirstOrDefault(policy => !string.IsNullOrEmpty(policy));
 
         switch (policy)
         {
@@ -115,6 +161,13 @@ public static class OpenApiDocumentContract
         EnsureAuthenticationResponses(operation);
         return Task.CompletedTask;
     }
+
+    private static string PlaneTag(string? policy) => policy switch
+    {
+        AdminPolicy => Admin,
+        HistoricalUploadsWritePolicy or HistoricalOperationsReadPolicy => Historical,
+        _ => Public,
+    };
 
     private static IEnumerable<object> EndpointMetadata(OpenApiOperationTransformerContext context) =>
         context.Description.ActionDescriptor?.EndpointMetadata ?? [];

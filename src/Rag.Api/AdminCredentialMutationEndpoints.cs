@@ -7,8 +7,12 @@ internal static class AdminCredentialMutationEndpoints
 {
     public static void MapAdminCredentialMutationEndpoints(this RouteGroupBuilder group)
     {
-        group.MapPost("/credentials/{credentialId:guid}/rotate", RotateCredentialAsync);
-        group.MapPost("/credentials/{credentialId:guid}/revoke", RevokeCredentialAsync);
+        group.MapPost("/credentials/{credentialId:guid}/rotate", RotateCredentialAsync)
+            .WithName("rotate_credential")
+            .Produces<AdminCredentialDelivery>(StatusCodes.Status200OK);
+        group.MapPost("/credentials/{credentialId:guid}/revoke", RevokeCredentialAsync)
+            .WithName("revoke_credential")
+            .Produces<AdminCredentialMetadata>(StatusCodes.Status200OK);
     }
 
     private static async Task<IResult> RotateCredentialAsync(

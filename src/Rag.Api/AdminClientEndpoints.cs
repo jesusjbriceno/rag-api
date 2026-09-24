@@ -7,9 +7,17 @@ internal static class AdminClientEndpoints
 {
     public static void MapAdminClientEndpoints(this RouteGroupBuilder group)
     {
-        group.MapPost("/clients", CreateClientAsync);
-        group.MapGet("/clients", ListClientsAsync);
-        group.MapGet("/clients/{clientId:guid}", GetClientAsync);
+        group.MapPost("/clients", CreateClientAsync)
+            .WithName("create_client")
+            .DeclaresBody<AdminCreateClientRequest>("application/json", group.IsOpenApiGeneration())
+            .Produces<AdminClientMetadata>(StatusCodes.Status201Created)
+            .Produces<AdminClientMetadata>(StatusCodes.Status200OK);
+        group.MapGet("/clients", ListClientsAsync)
+            .WithName("list_clients")
+            .Produces<AdminClientPage>(StatusCodes.Status200OK);
+        group.MapGet("/clients/{clientId:guid}", GetClientAsync)
+            .WithName("get_client")
+            .Produces<AdminClientDetail>(StatusCodes.Status200OK);
     }
 
     private static async Task<IResult> CreateClientAsync(
