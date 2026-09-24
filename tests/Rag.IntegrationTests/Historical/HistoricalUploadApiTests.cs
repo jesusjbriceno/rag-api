@@ -104,9 +104,14 @@ public sealed class HistoricalUploadApiTests(PostgreSqlFixture fixture) : IAsync
 
         var published = await PutContentAsync(token, reserved.UploadId, content);
         Assert.Equal(HttpStatusCode.OK, published.StatusCode);
+        using var publishedJson = JsonDocument.Parse(await published.Content.ReadAsStringAsync());
+        Assert.Equal(
+            Keys("upload_id", "state", "declared_bytes", "observed_bytes", "normalized_text_sha256"),
+            PropertyNames(publishedJson.RootElement));
         var body = (await published.Content.ReadFromJsonAsync<PublishedResponse>())!;
         Assert.Equal(reserved.UploadId, body.UploadId);
         Assert.Equal("published", body.State);
+        Assert.Equal(Encoding.UTF8.GetByteCount(content), body.DeclaredBytes);
         Assert.Equal(Encoding.UTF8.GetByteCount(content), body.ObservedBytes);
         Assert.Equal(hash, body.NormalizedTextSha256);
 
@@ -528,6 +533,12 @@ public sealed class HistoricalUploadApiTests(PostgreSqlFixture fixture) : IAsync
     }
 
     private static string Sha256Hex(string content) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(content))).ToLowerInvariant();
+
+    private static string[] PropertyNames(JsonElement element) =>
+        [.. element.EnumerateObject().Select(property => property.Name).OrderBy(name => name, StringComparer.Ordinal)];
+
+    private static string[] Keys(params string[] names) =>
+        [.. names.OrderBy(name => name, StringComparer.Ordinal)];
 
     private Task<HttpResponseMessage> CommitAsync(string token, Guid uploadId) =>
         SendWithTokenAsync(_client, token, HttpMethod.Post, $"/api/v1/historical/uploads/{uploadId}:commit");

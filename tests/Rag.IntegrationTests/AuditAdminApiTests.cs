@@ -56,6 +56,8 @@ public sealed class AuditAdminApiTests(PostgreSqlFixture fixture) : IAsyncLifeti
         Assert.Equal(HttpStatusCode.OK, audit.StatusCode);
         var rawAudit = await audit.Content.ReadAsStringAsync();
         using var auditJson = JsonDocument.Parse(rawAudit);
+        Assert.Equal(Keys("items", "nextCursor"), PropertyNames(auditJson.RootElement));
+        Assert.Equal(JsonValueKind.Null, auditJson.RootElement.GetProperty("nextCursor").ValueKind);
         var items = auditJson.RootElement.GetProperty("items").EnumerateArray().ToList();
         Assert.Equal(3, items.Count);
         Assert.Contains(items, item => item.GetProperty("action").GetString() == "create_client");
@@ -68,6 +70,7 @@ public sealed class AuditAdminApiTests(PostgreSqlFixture fixture) : IAsyncLifeti
 
         var firstPage = await SendAdminAsync(HttpMethod.Get, "/api/v1/admin/audit?limit=2", null);
         var firstJson = await ReadJsonAsync(firstPage);
+        Assert.Equal(Keys("items", "nextCursor"), PropertyNames(firstJson.RootElement));
         var firstItems = firstJson.RootElement.GetProperty("items").EnumerateArray().ToList();
         Assert.Equal(2, firstItems.Count);
         var nextCursor = firstJson.RootElement.GetProperty("nextCursor").GetString();
@@ -75,6 +78,7 @@ public sealed class AuditAdminApiTests(PostgreSqlFixture fixture) : IAsyncLifeti
 
         var secondPage = await SendAdminAsync(HttpMethod.Get, $"/api/v1/admin/audit?limit=2&cursor={nextCursor}", null);
         var secondJson = await ReadJsonAsync(secondPage);
+        Assert.Equal(Keys("items", "nextCursor"), PropertyNames(secondJson.RootElement));
         var secondItems = secondJson.RootElement.GetProperty("items").EnumerateArray().ToList();
         Assert.Single(secondItems);
         Assert.Equal(JsonValueKind.Null, secondJson.RootElement.GetProperty("nextCursor").ValueKind);
@@ -145,4 +149,10 @@ public sealed class AuditAdminApiTests(PostgreSqlFixture fixture) : IAsyncLifeti
         var stream = await response.Content.ReadAsStreamAsync();
         return await JsonDocument.ParseAsync(stream);
     }
+
+    private static string[] PropertyNames(JsonElement element) =>
+        [.. element.EnumerateObject().Select(property => property.Name).OrderBy(name => name, StringComparer.Ordinal)];
+
+    private static string[] Keys(params string[] names) =>
+        [.. names.OrderBy(name => name, StringComparer.Ordinal)];
 }
