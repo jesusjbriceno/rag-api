@@ -1,5 +1,25 @@
-# Se excluye la carpeta de propuestas
+# Local planning artifacts
 .proposals
 
 # Codegraph
 .codegraph
+
+# .NET build artifacts
+bin/
+obj/
+
+# Deployment secrets and local runtime state
+.env
+*.pem
+*.key
+content/
+backups/
+
+# Local tool state and build/test output
+.atl/
+.engram/
+.pi/
+TestResults/
+__pycache__/
+.ruff_cache/
+.vs/

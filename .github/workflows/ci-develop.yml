@@ -1,0 +1,572 @@
+name: ci-develop
+
+on:
+  push:
+    branches:
+      - develop
+
+concurrency:
+  group: develop-${{ github.sha }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    name: SonarQube quality gate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@eef61447b9ff4aafe5dcd4e0bbf5d482be7e7871 # v4.2.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
+        with:
+          global-json-file: global.json
+
+      - name: Install SonarScanner for .NET
+        run: dotnet tool install --global dotnet-sonarscanner --version 11.2.1
+
+      - name: Begin SonarQube analysis
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+        run: |
+          set -Eeuo pipefail
+          dotnet sonarscanner begin \
+            /k:"rag-api" \
+            /n:"rag-api" \
+            /d:sonar.host.url="${SONAR_HOST_URL}" \
+            /d:sonar.token="${SONAR_TOKEN}" \
+            /d:sonar.cs.opencover.reportsPaths="${RUNNER_TEMP}/coverage/**/coverage.opencover.xml"
+
+      - name: Restore
+        run: dotnet restore Rag.sln
+
+      - name: Build
+        run: dotnet build Rag.sln --configuration Release --no-restore
+
+      - name: Test with OpenCover coverage
+        run: |
+          set -Eeuo pipefail
+          dotnet test Rag.sln --configuration Release --no-build \
+            --collect:"XPlat Code Coverage;Format=opencover" \
+            --results-directory "${RUNNER_TEMP}/coverage"
+
+      - name: End SonarQube analysis
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+        run: |
+          set -Eeuo pipefail
+          dotnet sonarscanner end /d:sonar.token="${SONAR_TOKEN}"
+
+  package:
+    name: Build, scan, sign, publish (${{ matrix.component }}, ${{ matrix.architecture }})
+    needs:
+      - quality
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 35
+    permissions:
+      contents: read
+      packages: write # push and tag container images on GHCR
+      id-token: write # mint OIDC token for keyless cosign signing
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - component: api
+            target: api
+            image: ghcr.io/jesusjbriceno/rag-api
+            architecture: amd64
+            runner: ubuntu-latest
+          - component: api
+            target: api
+            image: ghcr.io/jesusjbriceno/rag-api
+            architecture: arm64
+            runner: ubuntu-24.04-arm
+          - component: operator
+            target: operator
+            image: ghcr.io/jesusjbriceno/rag-operator
+            architecture: amd64
+            runner: ubuntu-latest
+          - component: operator
+            target: operator
+            image: ghcr.io/jesusjbriceno/rag-operator
+            architecture: arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - name: Checkout
+        uses: actions/checkout@eef61447b9ff4aafe5dcd4e0bbf5d482be7e7871 # v4.2.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f7ce87c1d6bead3e36075b2ce75da1f6cc28aaca # v3.9.0
+
+      - name: Confirm native build architecture
+        run: |
+          set -Eeuo pipefail
+          case "$(uname -m)" in
+            x86_64) runner_architecture=amd64 ;;
+            aarch64) runner_architecture=arm64 ;;
+            *) echo "::error::Unsupported native runner architecture: $(uname -m)"; exit 1 ;;
+          esac
+          [[ "${runner_architecture}" == "${{ matrix.architecture }}" ]] || {
+            echo "::error::Runner architecture ${runner_architecture} does not match requested ${{ matrix.architecture }} platform."
+            exit 1
+          }
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@fb28c2b6339dcd94da6e4cbcbc5e888961f6f8c3 # v3.9.0
+        with:
+          cosign-release: v2.5.0
+
+      - name: Install Syft and crane
+        run: |
+          set -Eeuo pipefail
+          install_dir="${RUNNER_TEMP}/tools"
+          mkdir -p "${install_dir}"
+          case "${{ matrix.architecture }}" in
+            amd64)
+              syft_architecture=amd64
+              syft_checksum=689e12c5cbf67521ce61b9c126068f9eaabe1223e77971b2fede50033ff6b5cc
+              crane_architecture=x86_64
+              crane_checksum=36c67a932f489b3f2724b64af90b599a8ef2aa7b004872597373c0ad694dc059
+              ;;
+            arm64)
+              syft_architecture=arm64
+              syft_checksum=53f76737ddbf425c89240d5b0be0990b1a71e66890b44f19743221b17e6ee635
+              crane_architecture=arm64
+              crane_checksum=d2235f7779cd39c6e40f43701d2512c997409f629fb53e621ede0d57d3f995e2
+              ;;
+            *) echo "::error::Unsupported publication architecture: ${{ matrix.architecture }}"; exit 1 ;;
+          esac
+          curl -fsSL "https://github.com/anchore/syft/releases/download/v1.20.0/syft_1.20.0_linux_${syft_architecture}.tar.gz" \
+            -o "${install_dir}/syft.tar.gz"
+          echo "${syft_checksum}  ${install_dir}/syft.tar.gz" \
+            | sha256sum -c -
+          tar -xzf "${install_dir}/syft.tar.gz" -C "${install_dir}" syft
+          curl -fsSL "https://github.com/google/go-containerregistry/releases/download/v0.20.3/go-containerregistry_Linux_${crane_architecture}.tar.gz" \
+            -o "${install_dir}/crane.tar.gz"
+          echo "${crane_checksum}  ${install_dir}/crane.tar.gz" \
+            | sha256sum -c -
+          tar -xzf "${install_dir}/crane.tar.gz" -C "${install_dir}" crane
+          echo "${install_dir}" >> "${GITHUB_PATH}"
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Derive and validate publication tag
+        id: tag
+        run: |
+          set -Eeuo pipefail
+          if [[ ! "${GITHUB_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Refusing to publish: GITHUB_SHA '${GITHUB_SHA}' is not a 40-character hex commit SHA."
+            exit 1
+          fi
+          echo "publication_tag=develop-${GITHUB_SHA}" >> "${GITHUB_OUTPUT}"
+
+      # Build only into a local docker archive. Nothing is pushed to the
+      # registry here: the candidate is scanned and attested before any
+      # registry image (including a staging tag) is created.
+      - name: Build image locally (no publish)
+        id: build
+        uses: docker/build-push-action@ee4ca427a2f43b6a16632044ca514c076267da23 # v6.19.0
+        with:
+          context: .
+          file: Dockerfile
+          target: ${{ matrix.target }}
+          platforms: linux/${{ matrix.architecture }}
+          push: false
+          provenance: false
+          outputs: type=docker,dest=${{ runner.temp }}/image.tar
+          build-args: |
+            PUBLICATION_VERSION=develop-${{ github.sha }}
+            REVISION=${{ github.sha }}
+          labels: |
+            org.opencontainers.image.version=develop-${{ github.sha }}
+            org.opencontainers.image.revision=${{ github.sha }}
+
+      - name: Generate SBOM from local archive
+        run: |
+          set -Eeuo pipefail
+          syft "docker-archive:${RUNNER_TEMP}/image.tar" \
+            -o "spdx-json=${RUNNER_TEMP}/sbom.spdx.json"
+
+      - name: Scan local image for HIGH/CRITICAL vulnerabilities
+        uses: aquasecurity/trivy-action@f9424c10c36e288d5fa79bd3dfd1aeb2d6eae808 # v0.33.0
+        with:
+          input: ${{ runner.temp }}/image.tar
+          severity: HIGH,CRITICAL
+          exit-code: '1'
+          ignore-unfixed: 'false'
+          format: table
+          version: v0.74.0
+
+      # Only the exact archive that was SBOM'd and scanned is uploaded, and
+      # only by digest (no tag), so no registry image becomes pullable before
+      # signing and verification succeed.
+      - name: Upload clean candidate by digest
+        id: upload
+        env:
+          IMAGE: ${{ matrix.image }}
+        run: |
+          set -Eeuo pipefail
+          image="${IMAGE}"
+          archive="${RUNNER_TEMP}/image.tar"
+          digest="$(crane digest --tarball "${archive}")"
+          crane push "${archive}" "${image}@${digest}"
+          echo "digest=${digest}" >> "${GITHUB_OUTPUT}"
+
+      - name: Sign, attest, and publish architecture tag
+        timeout-minutes: 10
+        env:
+          IMAGE: ${{ matrix.image }}
+          IMAGE_DIGEST: ${{ steps.upload.outputs.digest }}
+          PUBLICATION_TAG: ${{ steps.tag.outputs.publication_tag }}
+          ARCHITECTURE: ${{ matrix.architecture }}
+        run: |
+          set -Eeuo pipefail
+
+          image="${IMAGE}"
+          digest="${IMAGE_DIGEST}"
+          publication_tag="${PUBLICATION_TAG}"
+          architecture="${ARCHITECTURE}"
+          platform_tag="${publication_tag}-${architecture}"
+          sbom="${RUNNER_TEMP}/sbom.spdx.json"
+          identity="https://github.com/jesusjbriceno/rag-api/.github/workflows/ci-develop.yml@refs/heads/develop"
+          issuer="https://token.actions.githubusercontent.com"
+          export REMOTE_OPERATION_TIMEOUT="5m"
+          export REMOTE_OPERATION_KILL_GRACE="30s"
+          exec 3>&2
+          source "${GITHUB_WORKSPACE}/scripts/ci-publication-guards.sh"
+
+          # Keyless signature over the image manifest digest.
+          run_remote "cosign-sign" cosign sign --yes "${image}@${digest}"
+
+          # Attach the SPDX SBOM as an attestation.
+          run_remote "cosign-attest-spdx" cosign attest --yes \
+            --type spdxjson \
+            --predicate "${sbom}" \
+            "${image}@${digest}"
+
+          # Attach SLSA v1 provenance describing this build.
+          provenance="${RUNNER_TEMP}/provenance.json"
+          cat > "${provenance}" <<EOF
+          {
+            "buildDefinition": {
+              "buildType": "https://github.com/jesusjbriceno/rag-api/.github/workflows/ci-develop.yml@refs/heads/develop",
+              "externalParameters": {
+                "source": {
+                  "uri": "git+https://github.com/jesusjbriceno/rag-api@refs/heads/develop",
+                  "digest": { "sha1": "${GITHUB_SHA}" }
+                },
+                "platform": "linux/${architecture}"
+              }
+            },
+            "runDetails": {
+              "builder": {
+                "id": "https://github.com/jesusjbriceno/rag-api/.github/workflows/ci-develop.yml@refs/heads/develop"
+              },
+              "metadata": {
+                "invocationId": "https://github.com/jesusjbriceno/rag-api/actions/runs/${GITHUB_RUN_ID}"
+              }
+            }
+          }
+          EOF
+          jq -e '
+            type == "object"
+            and (keys | sort == ["buildDefinition", "runDetails"])
+            and (.buildDefinition | type == "object" and has("buildType") and has("externalParameters"))
+            and (.buildDefinition.buildType | type == "string" and length > 0)
+            and (.buildDefinition.externalParameters.source | type == "object" and has("uri") and has("digest"))
+            and (.buildDefinition.externalParameters.source.uri | type == "string" and length > 0)
+            and (.buildDefinition.externalParameters.source.digest.sha1 | type == "string" and test("^[0-9a-f]{40}$"))
+            and (.runDetails | type == "object" and has("builder") and has("metadata"))
+            and (.runDetails.builder.id | type == "string" and length > 0)
+            and (.runDetails.metadata.invocationId | type == "string" and length > 0)
+          ' "${provenance}" >/dev/null
+          run_remote "cosign-attest-slsa" cosign attest --yes \
+            --type slsaprovenance1 \
+            --predicate "${provenance}" \
+            "${image}@${digest}"
+
+          # Collision check: never move an existing architecture tag to a different digest.
+          inspection_output="${RUNNER_TEMP}/final-tag-inspection.txt"
+          inspection_error="${RUNNER_TEMP}/final-tag-inspection.err"
+          if run_remote "ghcr-inspect-architecture-tag" crane digest \
+            "${image}:${platform_tag}" >"${inspection_output}" 2>"${inspection_error}"; then
+            existing_digest="$(<"${inspection_output}")"
+            if [[ ! "${existing_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              echo "::error::Final tag inspection returned an invalid digest; refusing publication."
+              exit 1
+            fi
+            if [[ "${existing_digest}" != "${digest}" ]]; then
+              echo "::error::Architecture tag ${image}:${platform_tag} already exists with digest ${existing_digest}; refusing to move it to ${digest}."
+              exit 1
+            fi
+            echo "Architecture tag ${image}:${platform_tag} already exists with the same digest; publication is idempotent."
+          else
+            inspection_exit_code="$?"
+            if ! is_manifest_unknown_error "${inspection_error}"; then
+              rm -f "${inspection_error}"
+              printf '%s\n' "::error::remote-operation:ghcr-inspect-architecture-tag:unresolved" >&3
+              exit "${inspection_exit_code}"
+            fi
+            rm -f "${inspection_error}"
+            printf '%s\n' "::notice::remote-operation:ghcr-inspect-architecture-tag:architecture-tag-absent" >&3
+            # This traceability tag is created only after scan, signing, and both attestations succeeded.
+            run_remote "cosign-copy-architecture-tag" cosign copy "${image}@${digest}" "${image}:${platform_tag}"
+            echo "Published ${image}:${platform_tag} at digest ${digest}."
+          fi
+
+          final_tag_digest="$(run_remote "ghcr-resolve-architecture-tag" crane digest "${image}:${platform_tag}")"
+          assert_final_digest "${digest}" "${final_tag_digest}"
+
+          proof_dir="${RUNNER_TEMP}/publication-proof"
+          mkdir -p "${proof_dir}"
+          jq -n \
+            --arg component "${{ matrix.component }}" \
+            --arg architecture "${architecture}" \
+            --arg source_revision "${GITHUB_SHA}" \
+            --arg run_id "${GITHUB_RUN_ID}" \
+            --arg run_url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+            --arg publication_tag "${publication_tag}" \
+            --arg identity "${identity}" \
+            --arg issuer "${issuer}" \
+            --arg digest_ref "${image}@${digest}" \
+            --arg tag_ref "${image}:${platform_tag}" \
+            --arg tag_digest "${final_tag_digest}" \
+            '{
+              component: $component,
+              architecture: $architecture,
+              source_revision: $source_revision,
+              workflow: {run_id: $run_id, url: $run_url},
+              publication_tag: $publication_tag,
+              signature: {identity: $identity, issuer: $issuer},
+              digest_ref: $digest_ref,
+              tag_ref: $tag_ref,
+              tag_digest: $tag_digest,
+              attachments: {signature: "attached", spdx: "attached", slsa: "attached"}
+            }' >"${proof_dir}/${{ matrix.component }}-${architecture}.json"
+
+      - name: Upload architecture publication proof
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: publication-platform-proof-${{ matrix.component }}-${{ matrix.architecture }}
+          path: ${{ runner.temp }}/publication-proof/${{ matrix.component }}-${{ matrix.architecture }}.json
+          if-no-files-found: error
+          retention-days: 1
+
+  promotion:
+    name: Assemble and publish multi-platform index (${{ matrix.component }})
+    needs:
+      - package
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write # create only the vetted multi-platform index and its immutable tag
+      id-token: write # mint OIDC token for the index signature and provenance
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - component: api
+            image: ghcr.io/jesusjbriceno/rag-api
+          - component: operator
+            image: ghcr.io/jesusjbriceno/rag-operator
+    steps:
+      - name: Checkout
+        uses: actions/checkout@eef61447b9ff4aafe5dcd4e0bbf5d482be7e7871 # v4.2.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f7ce87c1d6bead3e36075b2ce75da1f6cc28aaca # v3.9.0
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@fb28c2b6339dcd94da6e4cbcbc5e888961f6f8c3 # v3.9.0
+        with:
+          cosign-release: v2.5.0
+
+      - name: Install crane
+        run: |
+          set -Eeuo pipefail
+          install_dir="${RUNNER_TEMP}/tools"
+          mkdir -p "${install_dir}"
+          curl -fsSL "https://github.com/google/go-containerregistry/releases/download/v0.20.3/go-containerregistry_Linux_x86_64.tar.gz" \
+            -o "${install_dir}/crane.tar.gz"
+          echo "36c67a932f489b3f2724b64af90b599a8ef2aa7b004872597373c0ad694dc059  ${install_dir}/crane.tar.gz" \
+            | sha256sum -c -
+          tar -xzf "${install_dir}/crane.tar.gz" -C "${install_dir}" crane
+          echo "${install_dir}" >> "${GITHUB_PATH}"
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish immutable multi-platform index
+        env:
+          IMAGE: ${{ matrix.image }}
+          COMPONENT: ${{ matrix.component }}
+        run: |
+          set -Eeuo pipefail
+          [[ "${GITHUB_SHA}" =~ ^[0-9a-f]{40}$ ]] || {
+            echo "::error::Refusing multi-platform promotion for an invalid source revision."
+            exit 1
+          }
+          proof_dir="${RUNNER_TEMP}/publication-proof"
+          mkdir -p "${proof_dir}"
+          scripts/ci-multiarch-index.sh \
+            "${COMPONENT}" \
+            "${IMAGE}" \
+            "develop-${GITHUB_SHA}" \
+            "${proof_dir}/${COMPONENT}.json" \
+            "https://github.com/jesusjbriceno/rag-api/.github/workflows/ci-develop.yml@refs/heads/develop" \
+            "https://token.actions.githubusercontent.com"
+
+      - name: Upload multi-platform publication proof
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: publication-proof-${{ matrix.component }}
+          path: ${{ runner.temp }}/publication-proof/${{ matrix.component }}.json
+          if-no-files-found: error
+          retention-days: 1
+
+  completion:
+    name: Record durable publication completion
+    needs:
+      - promotion
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      deployments: write # create the authoritative completion record only
+    steps:
+      - name: Checkout
+        uses: actions/checkout@eef61447b9ff4aafe5dcd4e0bbf5d482be7e7871 # v4.2.1
+        with:
+          persist-credentials: false
+
+      - name: Download both final-tag publication proofs
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: publication-proof-*
+          path: ${{ runner.temp }}/publication-proofs
+          merge-multiple: true
+
+      - name: Create or reuse durable completion marker
+        id: marker
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: scripts/ci-publication-marker.sh "${RUNNER_TEMP}/publication-proofs"
+
+  verification:
+    name: Verify published attestations asynchronously
+    needs:
+      - completion
+    if: ${{ always() && needs.completion.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    permissions:
+      contents: read
+      packages: read # resolve published images only; no package mutation
+      checks: write # record verified, failed, or unknown without changing publication
+    steps:
+      - name: Checkout
+        uses: actions/checkout@eef61447b9ff4aafe5dcd4e0bbf5d482be7e7871 # v4.2.1
+        with:
+          persist-credentials: false
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@fb28c2b6339dcd94da6e4cbcbc5e888961f6f8c3 # v3.9.0
+        with:
+          cosign-release: v2.5.0
+
+      - name: Download final-tag publication proofs
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: publication-proof-*
+          path: ${{ runner.temp }}/publication-proofs
+          merge-multiple: true
+
+      - name: Verify signatures and attestations outside finalization
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: scripts/ci-publication-verifier.sh "${RUNNER_TEMP}/publication-proofs"
+
+  retention:
+    name: Prune stale develop tags
+    needs:
+      - promotion
+    runs-on: ubuntu-latest
+    if: ${{ always() && needs.promotion.result == 'success' }}
+    continue-on-error: true
+    permissions:
+      contents: read
+      packages: write # delete stale GHCR package versions
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Prune stale develop and staging versions
+        run: |
+          set -Eeuo pipefail
+
+          owner="jesusjbriceno"
+          now="$(date -u +%s)"
+          retain_develop=20
+          develop_min_age_seconds=2592000
+          staging_min_age_seconds=86400
+
+          prune_develop() {
+            local package="$1"
+            gh api --paginate "/users/${owner}/packages/container/${package}/versions" \
+              | jq -r --argjson now "${now}" --argjson retain "${retain_develop}" --argjson min_age "${develop_min_age_seconds}" '
+                  [ .[]? | select((.metadata.container.tags // []) | any(startswith("develop-"))) ]
+                  | sort_by(.created_at) | reverse
+                  | .[($retain):]
+                  | .[]
+                  | select((($now - (.created_at | fromdateiso8601)) > $min_age))
+                  | .id
+                ' \
+              | while read -r version_id; do
+                  gh api -X DELETE "/users/${owner}/packages/container/${package}/versions/${version_id}" >/dev/null
+                  echo "Deleted stale develop version ${version_id} of ${package}"
+                done
+          }
+
+          prune_staging() {
+            local package="$1"
+            gh api --paginate "/users/${owner}/packages/container/${package}/versions" \
+              | jq -r --argjson now "${now}" --argjson min_age "${staging_min_age_seconds}" '
+                  .[]? | select((.metadata.container.tags // []) | any(startswith("staging-")))
+                  | select((($now - (.created_at | fromdateiso8601)) > $min_age))
+                  | .id
+                ' \
+              | while read -r version_id; do
+                  gh api -X DELETE "/users/${owner}/packages/container/${package}/versions/${version_id}" >/dev/null
+                  echo "Deleted stale staging version ${version_id} of ${package}"
+                done
+          }
+
+          prune_develop "rag-api"
+          prune_develop "rag-operator"
+          prune_staging "rag-api"
+          prune_staging "rag-operator"

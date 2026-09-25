@@ -1,0 +1,2916 @@
+{
+  "openapi": "3.1.1",
+  "info": {
+    "title": "Rag.Api | v1",
+    "description": "Routes are grouped in three authorization planes. The public plane authenticates with a bearer JWT issued by POST /api/v1/auth/token and rejects tokens that carry a scope claim. The historical plane is configuration-gated and off by default (HistoricalIngestion:Enabled=false); when enabled it requires a bearer JWT carrying the exact scope historical:uploads.write or historical:operations.read. The admin plane is configuration-gated (AdminPlane:Enabled) and authenticates machine callers with six headers carrying an HMAC-SHA256 proof and an RS256 JWS assertion. The health endpoints /api/v1/health, /api/v1/health/live and /api/v1/health/ready are anonymous: /api/v1/health/live and /api/v1/health/ready answer plain text rather than JSON (200 healthy, 503 not ready), and /api/v1/health reports the same status as a JSON document.",
+    "version": "0.1.0-rc.1"
+  },
+  "paths": {
+    "/api/v1/health": {
+      "get": {
+        "tags": [
+          "Public"
+        ],
+        "operationId": "get_health",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error. The global exception handler answers application/problem+json titled \"Internal server error\".",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/token": {
+      "post": {
+        "tags": [
+          "Public"
+        ],
+        "operationId": "exchange_token",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TokenExchangeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request. The handler answers application/problem+json titled \"invalid_scope\" when the requested scope is unknown; the framework's bodyless rejection of a malformed or oversized request body uses the same status with no response body.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized. The credential key id is unknown or the secret does not match; the handler answers application/problem+json titled \"Unauthorized\".",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Unsupported content type. The framework binds the request body as application/json; any other content type is rejected before the handler runs, with no response body."
+          },
+          "429": {
+            "description": "Too many requests. The credential exchange is limited to five requests per minute per caller; the rate limiter answers 429 with no response body."
+          },
+          "500": {
+            "description": "Internal server error. The global exception handler answers application/problem+json titled \"Internal server error\".",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/collections": {
+      "post": {
+        "tags": [
+          "Public"
+        ],
+        "description": "Requires a bearer JWT. Public routes reject tokens that carry a scope claim.",
+        "operationId": "create_collection",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateCollectionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CollectionRepresentation"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request. The JSON body is malformed or empty, or the collection name is invalid; the handler answers application/problem+json titled \"Invalid input\".",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Unsupported content type. The handler only accepts application/json and answers application/problem+json titled \"Unsupported content type\".",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error. The global exception handler answers application/problem+json titled \"Internal server error\".",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized. The request is missing a valid bearer JWT; the middleware answers application/problem+json titled \"Unauthorized\".",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden. The caller is authenticated but lacks the required policy or scope; the middleware answers application/problem+json titled \"Forbidden\".",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": [ ]
+          }
+        ]
+      }
+    },
+    "/api/v1/collections/{collectionId}/ingestions:txt": {
+      "post": {
+        "tags": [
+          "Public"
+        ],
+        "description": "Requires a bearer JWT. Public routes reject tokens that carry a scope claim.",
+        "operationId": "accept_txt_ingestion",
+        "parameters": [
+          {
+            "name": "collectionId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TxtIngestionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TxtIngestionResponse"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TxtIngestionResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request. The JSON body is malformed or empty, or the ingestion input is invalid; the handler answers application/problem+json titled \"Invalid input\".",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found. The collection does not exist or does not belong to the caller; the handler answers application/problem+json titled \"Not found\".",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request body too large. The body exceeds 1,048,576 bytes, whether declared through Content-Length or observed while streaming; the handler answers application/problem+json titled \"Request body too large\".",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Unsupported content type. The handler only accepts application/json and answers application/problem+json titled \"Unsupported content type\".",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error. The global exception handler answers application/problem+json titled \"Internal server error\".",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized. The request is missing a valid bearer JWT; the middleware answers application/problem+json titled \"Unauthorized\".",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden. The caller is authenticated but lacks the required policy or scope; the middleware answers application/problem+json titled \"Forbidden\".",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": [ ]
+          }
+        ]
+      }
+    },
+    "/api/v1/collections/{collectionId}/operations/{operationId}": {
+      "get": {
+        "tags": [
+          "Public"
+        ],
+        "description": "Requires a bearer JWT. Public routes reject tokens that carry a scope claim.",
+        "operationId": "get_operation_status",
+        "parameters": [
+          {
+            "name": "collectionId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "operationId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperationStatusResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found. The operation does not exist or does not belong to the caller; the handler answers application/problem+json titled \"Not found\".",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error. The global exception handler answers application/problem+json titled \"Internal server error\".",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized. The request is missing a valid bearer JWT; the middleware answers application/problem+json titled \"Unauthorized\".",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden. The caller is authenticated but lacks the required policy or scope; the middleware answers application/problem+json titled \"Forbidden\".",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": [ ]
+          }
+        ]
+      }
+    },
+    "/api/v1/retrieval:search": {
+      "post": {
+        "tags": [
+          "Public"
+        ],
+        "description": "Requires a bearer JWT. Public routes reject tokens that carry a scope claim.",
+        "operationId": "retrieval_search",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RetrievalSearchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SemanticRetrievalMatch"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request. The JSON body is malformed or empty, or the query is invalid; the handler answers application/problem+json titled \"Invalid input\".",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found. One of the requested collections does not exist or does not belong to the caller; the handler answers application/problem+json titled \"Not found\".",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Unsupported content type. The handler only accepts application/json and answers application/problem+json titled \"Unsupported content type\".",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable entity. The requested collections use incompatible embedding profiles; the handler answers application/problem+json titled \"Incompatible embedding profiles\".",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error. The global exception handler answers application/problem+json titled \"Internal server error\".",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized. The request is missing a valid bearer JWT; the middleware answers application/problem+json titled \"Unauthorized\".",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden. The caller is authenticated but lacks the required policy or scope; the middleware answers application/problem+json titled \"Forbidden\".",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": [ ]
+          }
+        ]
+      }
+    },
+    "/api/v1/historical/collections/{collectionId}/uploads": {
+      "post": {
+        "tags": [
+          "Historical"
+        ],
+        "description": "Requires a bearer JWT carrying the scope historical:uploads.write.",
+        "operationId": "reserve_historical_upload",
+        "parameters": [
+          {
+            "name": "collectionId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReserveHistoricalUploadRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReserveHistoricalUploadResponse"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReserveHistoricalUploadResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request. The JSON body is malformed or empty, or the reserve command is invalid; the handler answers application/problem+json titled \"Invalid input\".",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found. The collection does not exist or does not belong to the caller; the handler answers application/problem+json titled \"Not found\".",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict. The idempotency key was reused with a different reserve fingerprint; the handler answers application/problem+json titled \"Conflict\".",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request body too large. The reserve body exceeds 16,384 bytes, whether declared through Content-Length or observed while streaming; the handler answers application/problem+json titled \"Request body too large\".",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Unsupported content type. The handler only accepts application/json and answers application/problem+json titled \"Unsupported content type\".",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests. The per-client pending-upload quota or the total storage watermark was exceeded; the handler answers application/problem+json with Retry-After: 30. The route is also rate limited, and the limiter answers 429 with no response body.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying; the quota and watermark paths set Retry-After: 30 on the problem response.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error. The global exception handler answers application/problem+json titled \"Internal server error\".",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized. The request is missing a valid bearer JWT; the middleware answers application/problem+json titled \"Unauthorized\".",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden. The caller is authenticated but lacks the required policy or scope; the middleware answers application/problem+json titled \"Forbidden\".",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": [ ]
+          }
+        ]
+      }
+    },
+    "/api/v1/historical/uploads/{uploadId}/content": {
+      "put": {
+        "tags": [
+          "Historical"
+        ],
+        "description": "Requires a bearer JWT carrying the scope historical:uploads.write.",
+        "operationId": "publish_historical_upload_content",
+        "parameters": [
+          {
+            "name": "uploadId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "text/plain": {
+              "schema": {
+                "type": "string"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublishedHistoricalUploadResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request. The observed content length or SHA-256 does not match the reserve, or the content contract is invalid; the handler answers application/problem+json titled \"Invalid input\".",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found. The upload does not exist or does not belong to the caller; the handler answers application/problem+json titled \"Not found\".",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict. The upload is already committed or was abandoned; the handler answers application/problem+json titled \"Conflict\".",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request body too large. The content exceeds the configured maximum normalized text size; the handler answers application/problem+json titled \"Request body too large\".",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Unsupported content type. The content body must be text/plain; the handler answers application/problem+json titled \"Unsupported content type\".",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests. Publishing would cross the total storage watermark; the handler answers application/problem+json with Retry-After: 30.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying; the watermark path sets it to 30 on the problem response.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error. The global exception handler answers application/problem+json titled \"Internal server error\".",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized. The request is missing a valid bearer JWT; the middleware answers application/problem+json titled \"Unauthorized\".",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden. The caller is authenticated but lacks the required policy or scope; the middleware answers application/problem+json titled \"Forbidden\".",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": [ ]
+          }
+        ]
+      }
+    },
+    "/api/v1/historical/uploads/{uploadId}:commit": {
+      "post": {
+        "tags": [
+          "Historical"
+        ],
+        "description": "Requires a bearer JWT carrying the scope historical:uploads.write.",
+        "operationId": "commit_historical_upload",
+        "parameters": [
+          {
+            "name": "uploadId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommitHistoricalUploadResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found. The upload or its collection does not exist or does not belong to the caller; the handler answers application/problem+json titled \"Not found\".",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict. The upload is not in the published state; the handler answers application/problem+json titled \"Conflict\".",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error. The global exception handler answers application/problem+json titled \"Internal server error\".",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized. The request is missing a valid bearer JWT; the middleware answers application/problem+json titled \"Unauthorized\".",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden. The caller is authenticated but lacks the required policy or scope; the middleware answers application/problem+json titled \"Forbidden\".",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": [ ]
+          }
+        ]
+      }
+    },
+    "/api/v1/historical/uploads/{uploadId}": {
+      "get": {
+        "tags": [
+          "Historical"
+        ],
+        "description": "Requires a bearer JWT carrying the scope historical:uploads.write.",
+        "operationId": "get_historical_upload",
+        "parameters": [
+          {
+            "name": "uploadId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HistoricalUploadStatusResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found. The upload does not exist or does not belong to the caller; the handler answers application/problem+json titled \"Not found\".",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error. The global exception handler answers application/problem+json titled \"Internal server error\".",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized. The request is missing a valid bearer JWT; the middleware answers application/problem+json titled \"Unauthorized\".",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden. The caller is authenticated but lacks the required policy or scope; the middleware answers application/problem+json titled \"Forbidden\".",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": [ ]
+          }
+        ]
+      }
+    },
+    "/api/v1/historical/collections/{collectionId}/operations/{operationId}": {
+      "get": {
+        "tags": [
+          "Historical"
+        ],
+        "description": "Requires a bearer JWT carrying the scope historical:operations.read.",
+        "operationId": "get_historical_operation",
+        "parameters": [
+          {
+            "name": "collectionId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "operationId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HistoricalOperationTelemetryResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found. The historical operation does not exist or does not belong to the caller; the handler answers application/problem+json titled \"Not found\".",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error. The global exception handler answers application/problem+json titled \"Internal server error\".",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized. The request is missing a valid bearer JWT; the middleware answers application/problem+json titled \"Unauthorized\".",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden. The caller is authenticated but lacks the required policy or scope; the middleware answers application/problem+json titled \"Forbidden\".",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": [ ]
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/clients": {
+      "post": {
+        "tags": [
+          "Admin"
+        ],
+        "operationId": "create_client",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdminCreateClientRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminClientMetadata"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminClientMetadata"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request. The Idempotency-Key claim is missing, the JSON body is malformed or empty, or the client name is invalid (a name of at most 200 characters is required). The admin plane answers application/problem+json with the code extension and, when present, traceId.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict. The idempotency key was reused with a different request, a create is already in progress, or a client with that name already exists. The admin plane answers application/problem+json with the code extension and, when present, traceId.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying; when a create is already in progress the response carries Retry-After: 1.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Unsupported content type. The handler only accepts application/json. The admin plane answers application/problem+json with the code extension and, when present, traceId.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error. The global exception handler answers application/problem+json titled \"Internal server error\"; the admin plane also carries the code extension and, when present, traceId.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized. Missing or invalid admin credentials; the admin plane answers application/problem+json with the code extension and, when present, traceId.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "X-Admin-App-Id": [ ],
+            "X-Admin-Key-Id": [ ],
+            "X-Admin-Timestamp": [ ],
+            "X-Admin-Signature": [ ],
+            "X-Admin-Assertion": [ ],
+            "Idempotency-Key": [ ]
+          }
+        ]
+      },
+      "get": {
+        "tags": [
+          "Admin"
+        ],
+        "operationId": "list_clients",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "pattern": "^-?(?:0|[1-9]\\d*)$",
+              "type": [
+                "integer",
+                "string"
+              ],
+              "format": "int32"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminClientPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request. The limit is outside 1..100 or the cursor is invalid. The admin plane answers application/problem+json with the code extension and, when present, traceId.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error. The global exception handler answers application/problem+json titled \"Internal server error\"; the admin plane also carries the code extension and, when present, traceId.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized. Missing or invalid admin credentials; the admin plane answers application/problem+json with the code extension and, when present, traceId.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "X-Admin-App-Id": [ ],
+            "X-Admin-Key-Id": [ ],
+            "X-Admin-Timestamp": [ ],
+            "X-Admin-Signature": [ ],
+            "X-Admin-Assertion": [ ],
+            "Idempotency-Key": [ ]
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/clients/{clientId}": {
+      "get": {
+        "tags": [
+          "Admin"
+        ],
+        "operationId": "get_client",
+        "parameters": [
+          {
+            "name": "clientId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminClientDetail"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found. The client does not exist. The admin plane answers application/problem+json with the code extension and, when present, traceId.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error. The global exception handler answers application/problem+json titled \"Internal server error\"; the admin plane also carries the code extension and, when present, traceId.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized. Missing or invalid admin credentials; the admin plane answers application/problem+json with the code extension and, when present, traceId.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "X-Admin-App-Id": [ ],
+            "X-Admin-Key-Id": [ ],
+            "X-Admin-Timestamp": [ ],
+            "X-Admin-Signature": [ ],
+            "X-Admin-Assertion": [ ],
+            "Idempotency-Key": [ ]
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/clients/{clientId}/credentials": {
+      "post": {
+        "tags": [
+          "Admin"
+        ],
+        "operationId": "issue_credential",
+        "parameters": [
+          {
+            "name": "clientId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdminIssueCredentialRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminCredentialDelivery"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request. The Idempotency-Key claim is missing, the JSON body is malformed or empty, the client id is empty, or the credential expiry is not in the future. The admin plane answers application/problem+json with the code extension and, when present, traceId.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found. The client does not exist. The admin plane answers application/problem+json with the code extension and, when present, traceId.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict. The idempotency key was reused, a secret was already delivered for this request, or an issue is already in progress. The admin plane answers application/problem+json with the code extension and, when present, traceId.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying; when an issue is already in progress the response carries Retry-After: 1.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Unsupported content type. The handler only accepts application/json. The admin plane answers application/problem+json with the code extension and, when present, traceId.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error. The global exception handler answers application/problem+json titled \"Internal server error\"; the admin plane also carries the code extension and, when present, traceId.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized. Missing or invalid admin credentials; the admin plane answers application/problem+json with the code extension and, when present, traceId.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "X-Admin-App-Id": [ ],
+            "X-Admin-Key-Id": [ ],
+            "X-Admin-Timestamp": [ ],
+            "X-Admin-Signature": [ ],
+            "X-Admin-Assertion": [ ],
+            "Idempotency-Key": [ ]
+          }
+        ]
+      },
+      "get": {
+        "tags": [
+          "Admin"
+        ],
+        "operationId": "list_credentials",
+        "parameters": [
+          {
+            "name": "clientId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AdminCredentialMetadata"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found. The client does not exist. The admin plane answers application/problem+json with the code extension and, when present, traceId.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error. The global exception handler answers application/problem+json titled \"Internal server error\"; the admin plane also carries the code extension and, when present, traceId.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized. Missing or invalid admin credentials; the admin plane answers application/problem+json with the code extension and, when present, traceId.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "X-Admin-App-Id": [ ],
+            "X-Admin-Key-Id": [ ],
+            "X-Admin-Timestamp": [ ],
+            "X-Admin-Signature": [ ],
+            "X-Admin-Assertion": [ ],
+            "Idempotency-Key": [ ]
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/credentials/{credentialId}": {
+      "get": {
+        "tags": [
+          "Admin"
+        ],
+        "operationId": "get_credential",
+        "parameters": [
+          {
+            "name": "credentialId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminCredentialMetadata"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found. The credential does not exist. The admin plane answers application/problem+json with the code extension and, when present, traceId.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error. The global exception handler answers application/problem+json titled \"Internal server error\"; the admin plane also carries the code extension and, when present, traceId.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized. Missing or invalid admin credentials; the admin plane answers application/problem+json with the code extension and, when present, traceId.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "X-Admin-App-Id": [ ],
+            "X-Admin-Key-Id": [ ],
+            "X-Admin-Timestamp": [ ],
+            "X-Admin-Signature": [ ],
+            "X-Admin-Assertion": [ ],
+            "Idempotency-Key": [ ]
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/credentials/{credentialId}/rotate": {
+      "post": {
+        "tags": [
+          "Admin"
+        ],
+        "operationId": "rotate_credential",
+        "parameters": [
+          {
+            "name": "credentialId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "description": "The quoted current credential version to rotate, for example \"v3\". A missing or malformed value is rejected with 400.",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminCredentialDelivery"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request. The Idempotency-Key claim is missing, the If-Match header is missing or malformed (the quoted version form \"v3\" is required), or the expected version is invalid. The admin plane answers application/problem+json with the code extension and, when present, traceId.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found. The credential does not exist. The admin plane answers application/problem+json with the code extension and, when present, traceId.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict. The If-Match version does not match the current version, the credential is not active, the idempotency key was reused, or a rotation is already in progress. The admin plane answers application/problem+json with the code extension and, when present, traceId.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying; when a rotation is already in progress the response carries Retry-After: 1.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error. The global exception handler answers application/problem+json titled \"Internal server error\"; the admin plane also carries the code extension and, when present, traceId.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized. Missing or invalid admin credentials; the admin plane answers application/problem+json with the code extension and, when present, traceId.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "X-Admin-App-Id": [ ],
+            "X-Admin-Key-Id": [ ],
+            "X-Admin-Timestamp": [ ],
+            "X-Admin-Signature": [ ],
+            "X-Admin-Assertion": [ ],
+            "Idempotency-Key": [ ]
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/credentials/{credentialId}/revoke": {
+      "post": {
+        "tags": [
+          "Admin"
+        ],
+        "operationId": "revoke_credential",
+        "parameters": [
+          {
+            "name": "credentialId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "If-Match",
+            "in": "header",
+            "description": "The quoted current credential version to revoke, for example \"v3\". A missing or malformed value is rejected with 400.",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminCredentialMetadata"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request. The Idempotency-Key claim is missing, the If-Match header is missing or malformed (the quoted version form \"v3\" is required), or the expected version is invalid. The admin plane answers application/problem+json with the code extension and, when present, traceId.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found. The credential does not exist. The admin plane answers application/problem+json with the code extension and, when present, traceId.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict. The If-Match version does not match the current version, the idempotency key was reused, or a revoke is already in progress. The admin plane answers application/problem+json with the code extension and, when present, traceId.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before retrying; when a revoke is already in progress the response carries Retry-After: 1.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error. The global exception handler answers application/problem+json titled \"Internal server error\"; the admin plane also carries the code extension and, when present, traceId.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized. Missing or invalid admin credentials; the admin plane answers application/problem+json with the code extension and, when present, traceId.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "X-Admin-App-Id": [ ],
+            "X-Admin-Key-Id": [ ],
+            "X-Admin-Timestamp": [ ],
+            "X-Admin-Signature": [ ],
+            "X-Admin-Assertion": [ ],
+            "Idempotency-Key": [ ]
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/audit": {
+      "get": {
+        "tags": [
+          "Admin"
+        ],
+        "operationId": "list_audit",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "pattern": "^-?(?:0|[1-9]\\d*)$",
+              "type": [
+                "integer",
+                "string"
+              ],
+              "format": "int32"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminAuditPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request. The limit is outside 1..100 or the cursor is invalid. The admin plane answers application/problem+json with the code extension and, when present, traceId.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error. The global exception handler answers application/problem+json titled \"Internal server error\"; the admin plane also carries the code extension and, when present, traceId.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized. Missing or invalid admin credentials; the admin plane answers application/problem+json with the code extension and, when present, traceId.",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "X-Admin-App-Id": [ ],
+            "X-Admin-Key-Id": [ ],
+            "X-Admin-Timestamp": [ ],
+            "X-Admin-Signature": [ ],
+            "X-Admin-Assertion": [ ],
+            "Idempotency-Key": [ ]
+          }
+        ]
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "AdminAuditEventMetadata": {
+        "required": [
+          "id",
+          "actorSubject",
+          "appId",
+          "action",
+          "outcome",
+          "occurredAt",
+          "targetType",
+          "targetId",
+          "operation",
+          "allowlistedJson"
+        ],
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "actorSubject": {
+            "type": "string"
+          },
+          "appId": {
+            "type": "string"
+          },
+          "action": {
+            "type": "string"
+          },
+          "outcome": {
+            "type": "string"
+          },
+          "occurredAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "targetType": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "targetId": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "operation": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "allowlistedJson": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        }
+      },
+      "AdminAuditPage": {
+        "required": [
+          "items",
+          "nextCursor"
+        ],
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminAuditEventMetadata"
+            }
+          },
+          "nextCursor": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        }
+      },
+      "AdminClientDetail": {
+        "required": [
+          "client",
+          "credentials"
+        ],
+        "type": "object",
+        "properties": {
+          "client": {
+            "$ref": "#/components/schemas/AdminClientMetadata"
+          },
+          "credentials": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminCredentialMetadata"
+            }
+          }
+        }
+      },
+      "AdminClientMetadata": {
+        "required": [
+          "id",
+          "name",
+          "description",
+          "createdAt"
+        ],
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "AdminClientPage": {
+        "required": [
+          "items",
+          "nextCursor"
+        ],
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminClientMetadata"
+            }
+          },
+          "nextCursor": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        }
+      },
+      "AdminCreateClientRequest": {
+        "required": [
+          "name",
+          "description"
+        ],
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "description": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        }
+      },
+      "AdminCredentialDelivery": {
+        "required": [
+          "credential",
+          "secret"
+        ],
+        "type": "object",
+        "properties": {
+          "credential": {
+            "$ref": "#/components/schemas/AdminCredentialMetadata"
+          },
+          "secret": {
+            "type": "string"
+          }
+        }
+      },
+      "AdminCredentialMetadata": {
+        "required": [
+          "id",
+          "clientId",
+          "keyId",
+          "description",
+          "version",
+          "state",
+          "createdAt",
+          "expiresAt",
+          "lastRotatedAt",
+          "revokedAt"
+        ],
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "clientId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "keyId": {
+            "type": "string"
+          },
+          "description": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "version": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          },
+          "state": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "expiresAt": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "date-time"
+          },
+          "lastRotatedAt": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "date-time"
+          },
+          "revokedAt": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "date-time"
+          }
+        }
+      },
+      "AdminIssueCredentialRequest": {
+        "required": [
+          "description",
+          "expiresAt"
+        ],
+        "type": "object",
+        "properties": {
+          "description": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "expiresAt": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "date-time"
+          }
+        }
+      },
+      "CollectionRepresentation": {
+        "required": [
+          "id",
+          "name",
+          "createdAt"
+        ],
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "CommitHistoricalUploadResponse": {
+        "required": [
+          "upload_id",
+          "document_id",
+          "document_version_id",
+          "operation_id",
+          "state"
+        ],
+        "type": "object",
+        "properties": {
+          "upload_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "document_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "document_version_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "operation_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "state": {
+            "type": "string"
+          }
+        }
+      },
+      "CreateCollectionRequest": {
+        "required": [
+          "name"
+        ],
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        }
+      },
+      "HealthResponse": {
+        "required": [
+          "status",
+          "version"
+        ],
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          }
+        }
+      },
+      "HistoricalOperationTelemetryResponse": {
+        "required": [
+          "id",
+          "status",
+          "failure_stage",
+          "failure_code",
+          "created_at",
+          "started_at",
+          "completed_at",
+          "queue_wait",
+          "chunk_count",
+          "chunking_duration",
+          "embedding_calls",
+          "embedding_duration",
+          "indexing_duration",
+          "terminal_state"
+        ],
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "status": {
+            "type": "string"
+          },
+          "failure_stage": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "failure_code": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "started_at": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "date-time"
+          },
+          "completed_at": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "date-time"
+          },
+          "queue_wait": {
+            "pattern": "^-?(\\d+\\.)?\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,7})?$",
+            "type": "string"
+          },
+          "chunk_count": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          },
+          "chunking_duration": {
+            "pattern": "^-?(\\d+\\.)?\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,7})?$",
+            "type": "string"
+          },
+          "embedding_calls": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          },
+          "embedding_duration": {
+            "pattern": "^-?(\\d+\\.)?\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,7})?$",
+            "type": "string"
+          },
+          "indexing_duration": {
+            "pattern": "^-?(\\d+\\.)?\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,7})?$",
+            "type": "string"
+          },
+          "terminal_state": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        }
+      },
+      "HistoricalUploadLimits": {
+        "required": [
+          "max_normalized_text_bytes",
+          "per_client_pending_quota",
+          "total_storage_watermark_bytes",
+          "abandoned_upload_expiry"
+        ],
+        "type": "object",
+        "properties": {
+          "max_normalized_text_bytes": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          },
+          "per_client_pending_quota": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          },
+          "total_storage_watermark_bytes": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int64"
+          },
+          "abandoned_upload_expiry": {
+            "pattern": "^-?(\\d+\\.)?\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,7})?$",
+            "type": "string"
+          }
+        }
+      },
+      "HistoricalUploadStatusResponse": {
+        "required": [
+          "upload_id",
+          "state",
+          "source_document_key",
+          "normalized_text_sha256",
+          "declared_bytes",
+          "document_id",
+          "document_version_id",
+          "operation_id",
+          "correlation_id"
+        ],
+        "type": "object",
+        "properties": {
+          "upload_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "state": {
+            "type": "string"
+          },
+          "source_document_key": {
+            "type": "string"
+          },
+          "normalized_text_sha256": {
+            "type": "string"
+          },
+          "declared_bytes": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int64"
+          },
+          "document_id": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "uuid"
+          },
+          "document_version_id": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "uuid"
+          },
+          "operation_id": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "uuid"
+          },
+          "correlation_id": {
+            "type": "string"
+          }
+        }
+      },
+      "OperationStatusResponse": {
+        "required": [
+          "id",
+          "status",
+          "created_at",
+          "started_at",
+          "completed_at",
+          "failure_stage"
+        ],
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "status": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "started_at": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "date-time"
+          },
+          "completed_at": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "date-time"
+          },
+          "failure_stage": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        }
+      },
+      "ProblemDetails": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "title": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "status": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "null",
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          },
+          "detail": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "instance": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        }
+      },
+      "PublishedHistoricalUploadResponse": {
+        "required": [
+          "upload_id",
+          "state",
+          "declared_bytes",
+          "observed_bytes",
+          "normalized_text_sha256"
+        ],
+        "type": "object",
+        "properties": {
+          "upload_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "state": {
+            "type": "string"
+          },
+          "declared_bytes": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int64"
+          },
+          "observed_bytes": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int64"
+          },
+          "normalized_text_sha256": {
+            "type": "string"
+          }
+        }
+      },
+      "ReserveHistoricalUploadRequest": {
+        "required": [
+          "source_document_key",
+          "candidate_id",
+          "manifest_id",
+          "run_id",
+          "normalized_text_sha256",
+          "declared_bytes",
+          "idempotency_key",
+          "display_name",
+          "format",
+          "source_root_alias"
+        ],
+        "type": "object",
+        "properties": {
+          "source_document_key": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "candidate_id": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "uuid"
+          },
+          "manifest_id": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "uuid"
+          },
+          "run_id": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "uuid"
+          },
+          "normalized_text_sha256": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "declared_bytes": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int64"
+          },
+          "idempotency_key": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "display_name": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "format": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "source_root_alias": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        }
+      },
+      "ReserveHistoricalUploadResponse": {
+        "required": [
+          "upload_id",
+          "state",
+          "correlation_id",
+          "created",
+          "accepted_limits"
+        ],
+        "type": "object",
+        "properties": {
+          "upload_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "state": {
+            "type": "string"
+          },
+          "correlation_id": {
+            "type": "string"
+          },
+          "created": {
+            "type": "boolean"
+          },
+          "accepted_limits": {
+            "$ref": "#/components/schemas/HistoricalUploadLimits"
+          }
+        }
+      },
+      "RetrievalSearchRequest": {
+        "required": [
+          "collection_ids",
+          "query",
+          "top_k"
+        ],
+        "type": "object",
+        "properties": {
+          "collection_ids": {
+            "type": [
+              "null",
+              "array"
+            ],
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "query": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "top_k": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          }
+        }
+      },
+      "SemanticRetrievalMatch": {
+        "required": [
+          "collectionId",
+          "documentId",
+          "documentVersionId",
+          "chunkId",
+          "chunkOrdinal",
+          "chunkText",
+          "cosineDistance"
+        ],
+        "type": "object",
+        "properties": {
+          "collectionId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "documentId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "documentVersionId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "chunkId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "chunkOrdinal": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          },
+          "chunkText": {
+            "type": "string"
+          },
+          "cosineDistance": {
+            "pattern": "^-?(?:0|[1-9]\\d*)(?:\\.\\d+)?(?:[eE][+-]?\\d+)?$",
+            "type": [
+              "number",
+              "string"
+            ],
+            "format": "double"
+          }
+        }
+      },
+      "TokenExchangeRequest": {
+        "required": [
+          "keyId",
+          "secret",
+          "scope"
+        ],
+        "type": "object",
+        "properties": {
+          "keyId": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "secret": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "scope": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        }
+      },
+      "TokenResponse": {
+        "required": [
+          "access_token",
+          "token_type",
+          "expires_in",
+          "scope"
+        ],
+        "type": "object",
+        "properties": {
+          "access_token": {
+            "type": "string"
+          },
+          "token_type": {
+            "type": "string"
+          },
+          "expires_in": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          },
+          "scope": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        }
+      },
+      "TxtIngestionRequest": {
+        "required": [
+          "file_name",
+          "content",
+          "external_reference"
+        ],
+        "type": "object",
+        "properties": {
+          "file_name": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "content": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "external_reference": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        }
+      },
+      "TxtIngestionResponse": {
+        "required": [
+          "document_id",
+          "document_version_id",
+          "operation_id"
+        ],
+        "type": "object",
+        "properties": {
+          "document_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "document_version_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "operation_id": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "uuid"
+          }
+        }
+      }
+    },
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "description": "Bearer JWT issued by POST /api/v1/auth/token. Public routes require a token without a scope claim; the historical routes require a token carrying the exact scope stated on the operation.",
+        "scheme": "bearer",
+        "bearerFormat": "JWT"
+      },
+      "X-Admin-App-Id": {
+        "type": "apiKey",
+        "description": "Admin plane application id, covered by the proof canonical string METHOD\nPathAndQuery\nBodyHash\nAssertionHash\nAppId\nKeyId\nTimestampUnixSeconds\nIdempotencyKey.",
+        "name": "X-Admin-App-Id",
+        "in": "header"
+      },
+      "X-Admin-Key-Id": {
+        "type": "apiKey",
+        "description": "Admin plane key id selecting the HMAC secret, covered by the proof canonical string METHOD\nPathAndQuery\nBodyHash\nAssertionHash\nAppId\nKeyId\nTimestampUnixSeconds\nIdempotencyKey.",
+        "name": "X-Admin-Key-Id",
+        "in": "header"
+      },
+      "X-Admin-Timestamp": {
+        "type": "apiKey",
+        "description": "Admin plane timestamp in Unix seconds, covered by the proof canonical string METHOD\nPathAndQuery\nBodyHash\nAssertionHash\nAppId\nKeyId\nTimestampUnixSeconds\nIdempotencyKey.",
+        "name": "X-Admin-Timestamp",
+        "in": "header"
+      },
+      "X-Admin-Signature": {
+        "type": "apiKey",
+        "description": "HMAC-SHA256 proof over the canonical string METHOD\nPathAndQuery\nBodyHash\nAssertionHash\nAppId\nKeyId\nTimestampUnixSeconds\nIdempotencyKey.",
+        "name": "X-Admin-Signature",
+        "in": "header"
+      },
+      "X-Admin-Assertion": {
+        "type": "apiKey",
+        "description": "RS256 JWS assertion identifying the caller; its hash is covered by the canonical string METHOD\nPathAndQuery\nBodyHash\nAssertionHash\nAppId\nKeyId\nTimestampUnixSeconds\nIdempotencyKey.",
+        "name": "X-Admin-Assertion",
+        "in": "header"
+      },
+      "Idempotency-Key": {
+        "type": "apiKey",
+        "description": "Idempotency key of the admin request, covered by the proof canonical string METHOD\nPathAndQuery\nBodyHash\nAssertionHash\nAppId\nKeyId\nTimestampUnixSeconds\nIdempotencyKey.",
+        "name": "Idempotency-Key",
+        "in": "header"
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "Public",
+      "description": "Routes authenticated with a bearer JWT issued by POST /api/v1/auth/token, plus the anonymous health and token endpoints."
+    },
+    {
+      "name": "Admin",
+      "description": "Configuration-gated machine-to-machine routes (AdminPlane:Enabled) authenticated with the six admin headers carrying an HMAC-SHA256 proof and an RS256 JWS assertion."
+    },
+    {
+      "name": "Historical",
+      "description": "Configuration-gated historical ingestion and telemetry routes (HistoricalIngestion:Enabled) requiring a bearer JWT carrying the exact operation scope."
+    }
+  ]
+}

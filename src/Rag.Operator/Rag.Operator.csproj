@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <OutputType>Exe</OutputType>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Rag.Application/Rag.Application.csproj" />
+    <ProjectReference Include="../Rag.Infrastructure/Rag.Infrastructure.csproj" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,247 @@
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
+using Npgsql;
+using Pgvector;
+using Pgvector.EntityFrameworkCore;
+using Rag.Application;
+using Rag.Domain;
+
+namespace Rag.Infrastructure;
+
+public static class InfrastructureServiceCollectionExtensions
+{
+    public static IServiceCollection AddInfrastructure(this IServiceCollection services, IConfiguration configuration, bool forOpenApiGeneration = false)
+    {
+        var connectionString = configuration.GetConnectionString("Rag")
+            ?? throw new InvalidOperationException("Connection string 'Rag' is required.");
+        var contentRoot = configuration["ContentStore:RootPath"]
+            ?? Path.Combine(AppContext.BaseDirectory, "content");
+
+        services.AddSingleton(_ =>
+        {
+            var dataSourceBuilder = new NpgsqlDataSourceBuilder(connectionString);
+            dataSourceBuilder.UseVector();
+            return dataSourceBuilder.Build();
+        });
+        services.AddDbContextFactory<IngestionDbContext>((serviceProvider, options) =>
+            options.UseNpgsql(
+                serviceProvider.GetRequiredService<NpgsqlDataSource>(),
+                providerOptions => providerOptions.UseVector()));
+        services.AddOptions<EmbeddingOptions>()
+            .Bind(configuration.GetSection(EmbeddingOptions.SectionName))
+            .Validate(options => TryValidateEmbeddingOptions(options, out _), "Embedding profiles are invalid.")
+            .ValidateOnStartUnlessOpenApiGeneration(forOpenApiGeneration);
+        services.AddOptions<LlamaCppOptions>()
+            .Bind(configuration.GetSection(LlamaCppOptions.SectionName))
+            .Validate(options => Uri.TryCreate(options.BaseUrl, UriKind.Absolute, out _), "LlamaCpp:BaseUrl must be an absolute URL.")
+            .ValidateOnStartUnlessOpenApiGeneration(forOpenApiGeneration);
+        services.AddOptions<OperationWorkerOptions>()
+            .Bind(configuration.GetSection(OperationWorkerOptions.SectionName))
+            .Validate(
+                options => options.LeaseDuration > TimeSpan.Zero && options.LeaseDuration <= TimeSpan.FromHours(1),
+                "OperationWorker:LeaseDuration must be greater than zero and no more than one hour.")
+            .Validate(
+                options => options.PollInterval > TimeSpan.Zero && options.PollInterval <= TimeSpan.FromMinutes(1),
+                "OperationWorker:PollInterval must be greater than zero and no more than one minute.")
+            .Validate(
+                options => options.WorkerId is null || options.WorkerId.Trim().Length is > 0 and <= 200,
+                "OperationWorker:WorkerId must be omitted or contain at most 200 characters.")
+            .ValidateOnStartUnlessOpenApiGeneration(forOpenApiGeneration);
+        services.AddOptions<JwtOptions>()
+            .Bind(configuration.GetSection(JwtOptions.SectionName))
+            .Validate(options => TryValidateJwtOptions(options, out _), "JWT authentication configuration is invalid.")
+            .ValidateOnStartUnlessOpenApiGeneration(forOpenApiGeneration);
+        if (configuration.GetValue<bool>("AdminPlane:Enabled"))
+        {
+            services.AddOptions<AdminAssertionOptions>()
+                .Bind(configuration.GetSection(AdminAssertionOptions.SectionName))
+                .Validate(options => TryValidateAdminAssertionOptions(options, out _), "Admin assertion authentication configuration is invalid.")
+                .ValidateOnStartUnlessOpenApiGeneration(forOpenApiGeneration);
+            services.AddOptions<AdminAppAuthOptions>()
+                .Bind(configuration.GetSection(AdminAppAuthOptions.SectionName))
+                .Validate(options => TryValidateAdminAppAuthOptions(options, out _), "Admin app machine authentication configuration is invalid.")
+                .ValidateOnStartUnlessOpenApiGeneration(forOpenApiGeneration);
+            services.AddOptions<AdminAuditOptions>()
+                .Bind(configuration.GetSection(AdminAuditOptions.SectionName))
+                .Validate(options => TryValidateAdminAuditOptions(options, out _), "Admin audit retention configuration is invalid.")
+                .ValidateOnStartUnlessOpenApiGeneration(forOpenApiGeneration);
+            services.AddOptions<AdminOperationsOptions>()
+                .Bind(configuration.GetSection(AdminOperationsOptions.SectionName))
+                .Validate(options => TryValidateAdminOperationsOptions(options, out _), "Admin operations retention configuration is invalid.")
+                .ValidateOnStartUnlessOpenApiGeneration(forOpenApiGeneration);
+            // A hosted worker is what opens the database connection during generation, so it is opt-in for
+            // that pass only.
+            if (!forOpenApiGeneration)
+            {
+                services.AddHostedService<AdminRetentionWorker>();
+            }
+            services.AddSingleton(serviceProvider => new AdminAssertionKeyRing(
+                serviceProvider.GetRequiredService<IOptions<AdminAssertionOptions>>().Value));
+            services.AddSingleton(serviceProvider => new AdminAssertionValidator(
+                serviceProvider.GetRequiredService<IOptions<AdminAssertionOptions>>().Value,
+                serviceProvider.GetRequiredService<AdminAssertionKeyRing>()));
+            services.AddSingleton(serviceProvider => new AdminMachineProofVerifier(
+                serviceProvider.GetRequiredService<IOptions<AdminAppAuthOptions>>().Value));
+            services.AddScoped<IAdminAssertionReplayRepository, AdminReplayRepository>();
+            services.AddScoped<AdminAuthenticator>();
+        }
+
+        services.AddScoped<IAdminRepository, AdminRepository>();
+        services.AddScoped<CreateClientHandler>();
+        services.AddScoped<ListClientsHandler>();
+        services.AddScoped<GetClientDetailHandler>();
+        services.AddScoped<IssueCredentialHandler>();
+        services.AddScoped<ListCredentialsHandler>();
+        services.AddScoped<GetCredentialHandler>();
+        services.AddScoped<RotateCredentialHandler>();
+        services.AddScoped<RevokeCredentialHandler>();
+        services.AddScoped<ListAuditHandler>();
+
+        services.AddSingleton(serviceProvider => new JwtKeyMaterial(serviceProvider.GetRequiredService<IOptions<JwtOptions>>().Value));
+        services.AddScoped<IIngestionRepository, IngestionRepository>();
+        services.AddScoped<ICollectionCommandRepository, OwnedCollectionRepository>();
+        services.AddScoped<IOperationStatusRepository, OwnedCollectionRepository>();
+        services.AddScoped<ICollectionOwnershipRepository, CollectionOwnershipRepository>();
+        services.AddSingleton<IEmbeddingProfileDefaults, ConfiguredEmbeddingProfileDefaults>();
+        services.AddSingleton<IImmutableContentStore>(_ => new FileSystemImmutableContentStore(contentRoot));
+        services.AddSingleton<IOperationClaimRepository, OperationClaimRepository>();
+        services.AddSingleton<IOperationCompletionRepository, OperationCompletionRepository>();
+        services.AddScoped<ICollectionEmbeddingProfileRepository, CollectionEmbeddingProfileRepository>();
+        services.AddScoped<ISemanticRetrievalRepository, PostgresSemanticRetrievalRepository>();
+        services.AddScoped<ICredentialRepository, CredentialRepository>();
+        services.AddScoped<ICredentialStateValidator, CredentialRepository>();
+        services.AddSingleton<ICredentialGenerator, CredentialGenerator>();
+        services.AddSingleton<ICredentialSecretHasher, Argon2idCredentialSecretHasher>();
+        services.AddSingleton<IAccessTokenIssuer, JwtAccessTokenIssuer>();
+        services.AddOptions<HistoricalIngestionOptions>()
+            .Bind(configuration.GetSection(HistoricalIngestionOptions.SectionName));
+        services.AddSingleton(serviceProvider =>
+            serviceProvider.GetRequiredService<IOptions<HistoricalIngestionOptions>>().Value);
+        services.AddHttpClient<IEmbeddingProvider, LlamaCppEmbeddingProvider>((serviceProvider, client) =>
+        {
+            var llamaCpp = serviceProvider.GetRequiredService<IOptions<LlamaCppOptions>>().Value;
+            client.BaseAddress = new Uri(llamaCpp.BaseUrl, UriKind.Absolute);
+        });
+        services.AddHttpClient<LlamaCppReadinessHealthCheck>((serviceProvider, client) =>
+        {
+            var llamaCpp = serviceProvider.GetRequiredService<IOptions<LlamaCppOptions>>().Value;
+            client.BaseAddress = new Uri(llamaCpp.BaseUrl, UriKind.Absolute);
+        });
+        services.AddHealthChecks()
+            .AddCheck<PostgreSqlReadinessHealthCheck>("postgresql", tags: ["ready"])
+            .AddCheck<LlamaCppReadinessHealthCheck>("llama-cpp", tags: ["ready"]);
+        services.AddSingleton<TxtChunker>();
+        services.AddSingleton<HistoricalTelemetry>();
+        services.AddSingleton<IOperationWorkloadClassifier, DefaultOperationWorkloadClassifier>();
+        services.AddSingleton<IOperationProcessor, TxtOperationProcessor>();
+        // A hosted worker is what opens the database connection during generation, so it is opt-in for
+        // that pass only.
+        if (!forOpenApiGeneration)
+        {
+            services.AddHostedService<OperationWorker>();
+        }
+        return services;
+    }
+
+    // Build-time OpenAPI generation starts the host but holds no production secrets and must not touch
+    // PostgreSQL, so the startup validators and the background workers are opt-in for that pass only.
+    private static OptionsBuilder<TOptions> ValidateOnStartUnlessOpenApiGeneration<TOptions>(
+        this OptionsBuilder<TOptions> optionsBuilder,
+        bool forOpenApiGeneration)
+        where TOptions : class =>
+        forOpenApiGeneration ? optionsBuilder : optionsBuilder.ValidateOnStart();
+
+    private static bool TryValidateEmbeddingOptions(EmbeddingOptions options, out Exception? exception)
+    {
+        try
+        {
+            options.Validate();
+            exception = null;
+            return true;
+        }
+        catch (Exception caught) when (caught is ArgumentException or InvalidOperationException)
+        {
+            exception = caught;
+            return false;
+        }
+    }
+
+    private static bool TryValidateJwtOptions(JwtOptions options, out Exception? exception)
+    {
+        try
+        {
+            options.Validate();
+            using var keyMaterial = new JwtKeyMaterial(options);
+            exception = null;
+            return true;
+        }
+        catch (Exception caught) when (caught is ArgumentException or InvalidOperationException or System.Security.Cryptography.CryptographicException)
+        {
+            exception = caught;
+            return false;
+        }
+    }
+
+    private static bool TryValidateAdminAssertionOptions(AdminAssertionOptions options, out Exception? exception)
+    {
+        try
+        {
+            options.Validate();
+            using var keyRing = new AdminAssertionKeyRing(options);
+            exception = null;
+            return true;
+        }
+        catch (Exception caught) when (caught is ArgumentException or InvalidOperationException or System.Security.Cryptography.CryptographicException)
+        {
+            exception = caught;
+            return false;
+        }
+    }
+
+    private static bool TryValidateAdminAppAuthOptions(AdminAppAuthOptions options, out Exception? exception)
+    {
+        try
+        {
+            options.Validate();
+            exception = null;
+            return true;
+        }
+        catch (Exception caught) when (caught is ArgumentException or InvalidOperationException)
+        {
+            exception = caught;
+            return false;
+        }
+    }
+
+    private static bool TryValidateAdminAuditOptions(AdminAuditOptions options, out Exception? exception)
+    {
+        try
+        {
+            options.Validate();
+            exception = null;
+            return true;
+        }
+        catch (Exception caught) when (caught is ArgumentException or InvalidOperationException)
+        {
+            exception = caught;
+            return false;
+        }
+    }
+
+    private static bool TryValidateAdminOperationsOptions(AdminOperationsOptions options, out Exception? exception)
+    {
+        try
+        {
+            options.Validate();
+            exception = null;
+            return true;
+        }
+        catch (Exception caught) when (caught is ArgumentException or InvalidOperationException)
+        {
+            exception = caught;
+            return false;
+        }
+    }
+}

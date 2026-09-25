@@ -1,0 +1,14 @@
+.git
+.codegraph
+.atl
+.proposals
+openspec
+bin
+obj
+**/bin
+**/obj
+.env
+backups
+content
+*.pem
+*.key

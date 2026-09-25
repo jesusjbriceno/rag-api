@@ -1,0 +1,177 @@
+using System.Diagnostics;
+using System.Text;
+using Microsoft.Extensions.Logging;
+using Rag.Application;
+using Rag.Domain;
+
+namespace Rag.Infrastructure;
+
+public sealed class TxtOperationProcessor(
+    IOperationCompletionRepository operations,
+    IImmutableContentStore contentStore,
+    TxtChunker chunker,
+    IEmbeddingProvider embeddingProvider,
+    ILogger<TxtOperationProcessor> logger,
+    HistoricalTelemetry telemetry) : IOperationProcessor
+{
+    private static readonly UTF8Encoding StrictUtf8 = new(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
+
+    public async Task<OperationProcessingDisposition> ProcessAsync(Operation operation, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var target = await operations.GetIndexingTargetAsync(operation.DocumentVersionId, cancellationToken)
+                ?? throw new ProcessingException("load", "The document version no longer exists.");
+            var content = await ReadContentAsync(target.Version, cancellationToken);
+            var text = DecodeContent(content);
+
+            var chunkingStarted = Stopwatch.GetTimestamp();
+            var chunks = ChunkContent(target.Version.Id, text);
+            telemetry.RecordChunking(operation.Id, chunks.Count, Stopwatch.GetElapsedTime(chunkingStarted));
+
+            var embeddingStarted = Stopwatch.GetTimestamp();
+            var embeddings = await EmbedChunksAsync(target.Profile, chunks, cancellationToken);
+            telemetry.RecordEmbedding(operation.Id, 1, Stopwatch.GetElapsedTime(embeddingStarted));
+
+            var indexingStarted = Stopwatch.GetTimestamp();
+            var completed = await operations.TryCompleteSuccessAsync(operation, target, chunks, embeddings, cancellationToken);
+            telemetry.RecordIndexing(operation.Id, Stopwatch.GetElapsedTime(indexingStarted));
+            telemetry.Complete(
+                operation.Id,
+                completed ? OperationTerminalState.Succeeded : OperationTerminalState.LeaseLost,
+                DateTimeOffset.UtcNow);
+
+            return completed
+                ? OperationProcessingDisposition.Succeeded
+                : OperationProcessingDisposition.LeaseLost;
+        }
+        catch (ProcessingException exception)
+        {
+            logger.LogWarning(
+                "Operation {OperationId} failed during {Stage}: {Message}",
+                operation.Id,
+                exception.Stage,
+                exception.Message);
+            var indexingStarted = Stopwatch.GetTimestamp();
+            var completed = await operations.TryCompleteFailureAsync(
+                operation,
+                exception.Stage,
+                Truncate(exception.Message),
+                cancellationToken);
+            telemetry.RecordIndexing(operation.Id, Stopwatch.GetElapsedTime(indexingStarted));
+            telemetry.Complete(
+                operation.Id,
+                completed ? OperationTerminalState.Failed : OperationTerminalState.LeaseLost,
+                DateTimeOffset.UtcNow);
+            return completed
+                ? OperationProcessingDisposition.Failed
+                : OperationProcessingDisposition.LeaseLost;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            logger.LogError(exception, "Operation {OperationId} failed during index persistence.", operation.Id);
+            var indexingStarted = Stopwatch.GetTimestamp();
+            var completed = await operations.TryCompleteFailureAsync(
+                operation,
+                "index",
+                Truncate(exception.GetBaseException().Message),
+                cancellationToken);
+            telemetry.RecordIndexing(operation.Id, Stopwatch.GetElapsedTime(indexingStarted));
+            telemetry.Complete(
+                operation.Id,
+                completed ? OperationTerminalState.Failed : OperationTerminalState.LeaseLost,
+                DateTimeOffset.UtcNow);
+            return completed
+                ? OperationProcessingDisposition.Failed
+                : OperationProcessingDisposition.LeaseLost;
+        }
+    }
+
+    private async Task<byte[]> ReadContentAsync(DocumentVersion version, CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await contentStore.ReadAsync(version.ContentReference, version.ContentHash, cancellationToken);
+        }
+        catch (Exception exception) when (exception is IOException or InvalidOperationException or PlatformNotSupportedException)
+        {
+            throw new ProcessingException("load", exception.Message, exception);
+        }
+    }
+
+    private static string DecodeContent(byte[] content)
+    {
+        try
+        {
+            var text = StrictUtf8.GetString(content);
+            if (text.Contains('\0'))
+            {
+                throw new InvalidDataException("The immutable content contains a NUL character.");
+            }
+
+            return text;
+        }
+        catch (DecoderFallbackException exception)
+        {
+            throw new ProcessingException("parse", "The immutable content is not valid UTF-8 TXT.", exception);
+        }
+        catch (InvalidDataException exception)
+        {
+            throw new ProcessingException("parse", exception.Message, exception);
+        }
+    }
+
+    private IReadOnlyList<Chunk> ChunkContent(Guid documentVersionId, string content)
+    {
+        try
+        {
+            return chunker.Chunk(documentVersionId, content.Length > 0 && content[0] == '\uFEFF' ? content[1..] : content);
+        }
+        catch (InvalidDataException exception)
+        {
+            throw new ProcessingException("parse", exception.Message, exception);
+        }
+        catch (ArgumentException exception)
+        {
+            throw new ProcessingException("parse", exception.Message, exception);
+        }
+    }
+
+    private async Task<IReadOnlyList<ChunkEmbeddingInput>> EmbedChunksAsync(
+        EmbeddingProfile profile,
+        IReadOnlyList<Chunk> chunks,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var response = await embeddingProvider.EmbedAsync(profile, chunks.Select(chunk => chunk.Text).ToArray(), cancellationToken);
+            if (response.Vectors.Count != chunks.Count
+                || response.Vectors.Any(vector => vector.Length != profile.Dimensions || vector.Any(value => !float.IsFinite(value))))
+            {
+                throw new EmbeddingProviderException("The embedding provider returned vectors incompatible with the collection profile.");
+            }
+
+            return chunks.Zip(response.Vectors, (chunk, values) => new ChunkEmbeddingInput(chunk.Id, values)).ToArray();
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            throw new ProcessingException("embed", exception.Message, exception);
+        }
+    }
+
+    private static string Truncate(string message) => message.Length <= 2_000 ? message : message[..2_000];
+
+    private sealed class ProcessingException(string stage, string message, Exception? innerException = null)
+        : Exception(message, innerException)
+    {
+        public string Stage { get; } = stage;
+    }
+}
