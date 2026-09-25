@@ -53,9 +53,9 @@ disposition, 71,580 observations, 35,788 docs/h, median 1.75 ms).
   line removed from `ci-pr.yml` and from the `companion` job of `ci-release.yml`; `companion-format-smoke` renamed
   to "Clean-machine 4-format smoke", its step renamed, the `soffice` block and `libreOfficePath` entry removed, and
   the pass/fail messages now name four formats. Both workflows parse as valid YAML (actionlint is not installed).
-- [ ] 5. Fix the `CycloneDX` pin in `ci-release.yml` as its own commit, because that pin blocks the whole release
-  workflow independently of this change. Reason: the pin is changed to `6.2.0` in the working tree, but its separate
-  commit is parent-owned (no commits were made here).
+- [x] 5. Fix the `CycloneDX` pin in `ci-release.yml` as its own commit, because that pin blocks the whole release
+  workflow independently of this change. Resolved in `fd7af23`: `ci-release.yml` now installs `CycloneDX --version
+  6.2.0`, the version that exists on NuGet.
 - [x] 6. Build, run the suite, and confirm no reference to the removed path survives.
   Evidence: `dotnet build Rag.sln --configuration Release` → 0 errors (8 pre-existing `NU1903` warnings, none new);
   `dotnet test Rag.sln --configuration Release` → all five projects green (90 + 124 + 30 + 425 + 60 = 729 passed,
