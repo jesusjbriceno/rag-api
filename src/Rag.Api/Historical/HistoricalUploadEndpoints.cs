@@ -10,22 +10,97 @@ public static class HistoricalUploadEndpoints
         endpoints.MapPost(
             "/api/v1/historical/collections/{collectionId:guid}/uploads",
             ReserveAsync)
+            .WithName("reserve_historical_upload")
+            .DeclaresBody<ReserveHistoricalUploadRequest>("application/json", endpoints.IsOpenApiGeneration())
+            .Produces<ReserveHistoricalUploadResponse>(StatusCodes.Status201Created)
+            .Produces<ReserveHistoricalUploadResponse>(StatusCodes.Status200OK)
+            .DeclaresProblem(
+                StatusCodes.Status400BadRequest,
+                "Bad request. The JSON body is malformed or empty, or the reserve command is invalid; the handler " +
+                "answers application/problem+json titled \"Invalid input\".")
+            .DeclaresProblem(
+                StatusCodes.Status404NotFound,
+                "Not found. The collection does not exist or does not belong to the caller; the handler answers " +
+                "application/problem+json titled \"Not found\".")
+            .DeclaresProblem(
+                StatusCodes.Status409Conflict,
+                "Conflict. The idempotency key was reused with a different reserve fingerprint; the handler answers " +
+                "application/problem+json titled \"Conflict\".")
+            .DeclaresProblem(
+                StatusCodes.Status413PayloadTooLarge,
+                "Request body too large. The reserve body exceeds 16,384 bytes, whether declared through Content-Length " +
+                "or observed while streaming; the handler answers application/problem+json titled \"Request body too large\".")
+            .DeclaresProblem(
+                StatusCodes.Status415UnsupportedMediaType,
+                "Unsupported content type. The handler only accepts application/json and answers application/problem+json " +
+                "titled \"Unsupported content type\".")
+            .DeclaresProblem(
+                StatusCodes.Status429TooManyRequests,
+                "Too many requests. The per-client pending-upload quota or the total storage watermark was exceeded; " +
+                "the handler answers application/problem+json with Retry-After: 30. The route is also rate limited, and " +
+                "the limiter answers 429 with no response body.",
+                retryAfterDescription: "Seconds to wait before retrying; the quota and watermark paths set " +
+                    "Retry-After: 30 on the problem response.")
             .RequireAuthorization(HistoricalAuthorizationPolicies.UploadsWrite)
             .RequireRateLimiting(HistoricalRateLimitPolicies.Uploads);
 
         endpoints.MapPut(
             "/api/v1/historical/uploads/{uploadId:guid}/content",
             PublishContentAsync)
+            .WithName("publish_historical_upload_content")
+            .DeclaresBody<string>("text/plain", endpoints.IsOpenApiGeneration())
+            .Produces<PublishedHistoricalUploadResponse>(StatusCodes.Status200OK)
+            .DeclaresProblem(
+                StatusCodes.Status400BadRequest,
+                "Bad request. The observed content length or SHA-256 does not match the reserve, or the content " +
+                "contract is invalid; the handler answers application/problem+json titled \"Invalid input\".")
+            .DeclaresProblem(
+                StatusCodes.Status404NotFound,
+                "Not found. The upload does not exist or does not belong to the caller; the handler answers " +
+                "application/problem+json titled \"Not found\".")
+            .DeclaresProblem(
+                StatusCodes.Status409Conflict,
+                "Conflict. The upload is already committed or was abandoned; the handler answers " +
+                "application/problem+json titled \"Conflict\".")
+            .DeclaresProblem(
+                StatusCodes.Status413PayloadTooLarge,
+                "Request body too large. The content exceeds the configured maximum normalized text size; the handler " +
+                "answers application/problem+json titled \"Request body too large\".")
+            .DeclaresProblem(
+                StatusCodes.Status415UnsupportedMediaType,
+                "Unsupported content type. The content body must be text/plain; the handler answers " +
+                "application/problem+json titled \"Unsupported content type\".")
+            .DeclaresProblem(
+                StatusCodes.Status429TooManyRequests,
+                "Too many requests. Publishing would cross the total storage watermark; the handler answers " +
+                "application/problem+json with Retry-After: 30.",
+                retryAfterDescription: "Seconds to wait before retrying; the watermark path sets it to 30 on the problem response.")
             .RequireAuthorization(HistoricalAuthorizationPolicies.UploadsWrite);
 
         endpoints.MapPost(
             "/api/v1/historical/uploads/{uploadId:guid}:commit",
             CommitAsync)
+            .WithName("commit_historical_upload")
+            .Produces<CommitHistoricalUploadResponse>(StatusCodes.Status200OK)
+            .DeclaresProblem(
+                StatusCodes.Status404NotFound,
+                "Not found. The upload or its collection does not exist or does not belong to the caller; the handler " +
+                "answers application/problem+json titled \"Not found\".")
+            .DeclaresProblem(
+                StatusCodes.Status409Conflict,
+                "Conflict. The upload is not in the published state; the handler answers application/problem+json " +
+                "titled \"Conflict\".")
             .RequireAuthorization(HistoricalAuthorizationPolicies.UploadsWrite);
 
         endpoints.MapGet(
             "/api/v1/historical/uploads/{uploadId:guid}",
             GetAsync)
+            .WithName("get_historical_upload")
+            .Produces<HistoricalUploadStatusResponse>(StatusCodes.Status200OK)
+            .DeclaresProblem(
+                StatusCodes.Status404NotFound,
+                "Not found. The upload does not exist or does not belong to the caller; the handler answers " +
+                "application/problem+json titled \"Not found\".")
             .RequireAuthorization(HistoricalAuthorizationPolicies.UploadsWrite);
     }
 
@@ -59,20 +134,17 @@ public static class HistoricalUploadEndpoints
                     value.Format,
                     value.SourceRootAlias),
                 cancellationToken);
-            return Results.Json(new
-            {
-                upload_id = result.UploadId,
-                state = HistoricalEndpointSupport.ToStateString(result.State),
-                correlation_id = result.CorrelationId,
-                created = result.Created,
-                accepted_limits = new
-                {
-                    max_normalized_text_bytes = result.MaxNormalizedTextBytes,
-                    per_client_pending_quota = result.PerClientPendingQuota,
-                    total_storage_watermark_bytes = result.TotalStorageWatermarkBytes,
-                    abandoned_upload_expiry = result.AbandonedUploadExpiry,
-                },
-            }, statusCode: result.Created ? StatusCodes.Status201Created : StatusCodes.Status200OK);
+            return Results.Json(new ReserveHistoricalUploadResponse(
+                result.UploadId,
+                HistoricalEndpointSupport.ToStateString(result.State),
+                result.CorrelationId,
+                result.Created,
+                new HistoricalUploadLimits(
+                    result.MaxNormalizedTextBytes,
+                    result.PerClientPendingQuota,
+                    result.TotalStorageWatermarkBytes,
+                    result.AbandonedUploadExpiry)),
+                statusCode: result.Created ? StatusCodes.Status201Created : StatusCodes.Status200OK);
         }
         catch (Exception exception) when (HistoricalEndpointSupport.TryMap(exception, context, out var mapped))
         {
@@ -98,14 +170,12 @@ public static class HistoricalUploadEndpoints
                 ApiEndpointSupport.GetClientId(context.User),
                 context.Request.Body,
                 cancellationToken);
-            return Results.Ok(new
-            {
-                upload_id = result.UploadId,
-                state = HistoricalEndpointSupport.ToStateString(result.State),
-                declared_bytes = result.DeclaredBytes,
-                observed_bytes = result.ObservedBytes,
-                normalized_text_sha256 = result.NormalizedTextSha256,
-            });
+            return Results.Ok(new PublishedHistoricalUploadResponse(
+                result.UploadId,
+                HistoricalEndpointSupport.ToStateString(result.State),
+                result.DeclaredBytes,
+                result.ObservedBytes,
+                result.NormalizedTextSha256));
         }
         catch (Exception exception) when (HistoricalEndpointSupport.TryMap(exception, context, out var mapped))
         {
@@ -125,14 +195,12 @@ public static class HistoricalUploadEndpoints
                 uploadId,
                 ApiEndpointSupport.GetClientId(context.User),
                 cancellationToken);
-            return Results.Ok(new
-            {
-                upload_id = result.UploadId,
-                document_id = result.DocumentId,
-                document_version_id = result.DocumentVersionId,
-                operation_id = result.OperationId,
-                state = HistoricalEndpointSupport.ToStateString(result.State),
-            });
+            return Results.Ok(new CommitHistoricalUploadResponse(
+                result.UploadId,
+                result.DocumentId,
+                result.DocumentVersionId,
+                result.OperationId,
+                HistoricalEndpointSupport.ToStateString(result.State)));
         }
         catch (Exception exception) when (HistoricalEndpointSupport.TryMap(exception, context, out var mapped))
         {
@@ -152,18 +220,16 @@ public static class HistoricalUploadEndpoints
                 uploadId,
                 ApiEndpointSupport.GetClientId(context.User),
                 cancellationToken);
-            return Results.Ok(new
-            {
-                upload_id = result.UploadId,
-                state = HistoricalEndpointSupport.ToStateString(result.State),
-                source_document_key = result.SourceDocumentKey,
-                normalized_text_sha256 = result.NormalizedTextSha256,
-                declared_bytes = result.DeclaredBytes,
-                document_id = result.DocumentId,
-                document_version_id = result.DocumentVersionId,
-                operation_id = result.OperationId,
-                correlation_id = result.CorrelationId,
-            });
+            return Results.Ok(new HistoricalUploadStatusResponse(
+                result.UploadId,
+                HistoricalEndpointSupport.ToStateString(result.State),
+                result.SourceDocumentKey,
+                result.NormalizedTextSha256,
+                result.DeclaredBytes,
+                result.DocumentId,
+                result.DocumentVersionId,
+                result.OperationId,
+                result.CorrelationId));
         }
         catch (Exception exception) when (HistoricalEndpointSupport.TryMap(exception, context, out var mapped))
         {

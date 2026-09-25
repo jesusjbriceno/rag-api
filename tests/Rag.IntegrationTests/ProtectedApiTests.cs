@@ -3,6 +3,7 @@ using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
@@ -132,6 +133,42 @@ public sealed class ProtectedApiTests(PostgreSqlFixture fixture) : IAsyncLifetim
     }
 
     [Fact]
+    public async Task Retrieval_search_success_body_pins_the_match_key_set()
+    {
+        var owner = await CreateAuthenticatedClientAsync("retrieval");
+        var collection = await CreateCollectionAsync(owner, "Retrieval");
+        var seededChunkId = await SeedSearchableChunkAsync(collection.Id);
+
+        var response = await SendAsync(owner.Token, HttpMethod.Post, "/api/v1/retrieval:search", "application/json", $"{{\"collection_ids\":[\"{collection.Id}\"],\"query\":\"q\",\"top_k\":5}}");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal(JsonValueKind.Array, document.RootElement.ValueKind);
+        var match = Assert.Single(document.RootElement.EnumerateArray());
+        Assert.Equal(
+            Keys("collectionId", "documentId", "documentVersionId", "chunkId", "chunkOrdinal", "chunkText", "cosineDistance"),
+            PropertyNames(match));
+        Assert.Equal(seededChunkId, match.GetProperty("chunkId").GetGuid());
+    }
+
+    [Fact]
+    public async Task Txt_ingestion_success_body_pins_the_response_key_set()
+    {
+        var owner = await CreateAuthenticatedClientAsync("ingestion");
+        var collection = await CreateCollectionAsync(owner, "Ingestion");
+
+        var accepted = await SendAsync(owner.Token, HttpMethod.Post, $"/api/v1/collections/{collection.Id}/ingestions:txt", "application/json", "{\"file_name\":\"response.txt\",\"content\":\"text\"}");
+
+        Assert.Equal(HttpStatusCode.Accepted, accepted.StatusCode);
+        using var document = JsonDocument.Parse(await accepted.Content.ReadAsStringAsync());
+        var body = document.RootElement;
+        Assert.Equal(Keys("document_id", "document_version_id", "operation_id"), PropertyNames(body));
+        Assert.NotEqual(Guid.Empty, body.GetProperty("document_id").GetGuid());
+        Assert.NotEqual(Guid.Empty, body.GetProperty("document_version_id").GetGuid());
+        Assert.NotEqual(Guid.Empty, body.GetProperty("operation_id").GetGuid());
+    }
+
+    [Fact]
     public async Task Historical_scope_exchange_is_rejected_by_the_default_feature_gate()
     {
         var historical = await CreateHistoricalClientAsync(_factory);
@@ -176,6 +213,28 @@ public sealed class ProtectedApiTests(PostgreSqlFixture fixture) : IAsyncLifetim
 
         var denied = await SendWithClientAsync(enabledClient, scopedToken.AccessToken, HttpMethod.Post, "/api/v1/collections", "application/json", "{\"name\":\"should-not-exist\"}");
         Assert.Equal(HttpStatusCode.Forbidden, denied.StatusCode);
+    }
+
+    [Fact]
+    public async Task Historical_scoped_token_body_pins_the_token_key_set()
+    {
+        using var enabledFactory = new ProtectedApiFactory(fixture.ConnectionString, _contentRoot, enableHistoricalIngestion: true);
+        using var enabledClient = enabledFactory.CreateClient();
+        var historical = await CreateHistoricalClientAsync(enabledFactory);
+
+        var exchange = await enabledClient.PostAsJsonAsync("/api/v1/auth/token", new
+        {
+            keyId = historical.KeyId,
+            secret = historical.Secret,
+            scope = $"{HistoricalScopes.UploadsWrite} {HistoricalScopes.OperationsRead}",
+        });
+
+        Assert.Equal(HttpStatusCode.OK, exchange.StatusCode);
+        using var document = JsonDocument.Parse(await exchange.Content.ReadAsStringAsync());
+        var body = document.RootElement;
+        Assert.Equal(Keys("access_token", "token_type", "expires_in", "scope"), PropertyNames(body));
+        Assert.Equal("Bearer", body.GetProperty("token_type").GetString());
+        Assert.Contains(HistoricalScopes.UploadsWrite, body.GetProperty("scope").GetString(), StringComparison.Ordinal);
     }
 
     private async Task<HistoricalClient> CreateHistoricalClientAsync(ProtectedApiFactory factory)
@@ -231,6 +290,26 @@ public sealed class ProtectedApiTests(PostgreSqlFixture fixture) : IAsyncLifetim
         return new CollectionResponse(collection.Id, collection.Name);
     }
 
+    private async Task<Guid> SeedSearchableChunkAsync(Guid collectionId)
+    {
+        var options = new DbContextOptionsBuilder<IngestionDbContext>()
+            .UseNpgsql(fixture.ConnectionString, options => options.UseVector())
+            .Options;
+        await using var context = new IngestionDbContext(options);
+        var collection = await context.Collections.AsNoTracking().SingleAsync(item => item.Id == collectionId);
+        var profile = collection.GetEmbeddingProfile();
+        var now = DateTimeOffset.UtcNow;
+        var document = new Document(Guid.NewGuid(), collectionId, "source://retrieval", now);
+        var versionId = Guid.NewGuid();
+        document.AddVersion(versionId, "retrieval.txt", ContentHash.FromBytes("retrieval"u8), ContentReference.ForVersion(versionId), now);
+        var chunk = new Chunk(Guid.NewGuid(), versionId, 1, "retrieval text");
+        context.Documents.Add(document);
+        context.Chunks.Add(chunk);
+        context.ChunkEmbeddings.Add(new ChunkEmbedding(Guid.NewGuid(), collectionId, chunk.Id, UnitVector(profile.Dimensions)));
+        await context.SaveChangesAsync();
+        return chunk.Id;
+    }
+
     private async Task SetOperationFailureAsync(Guid operationId)
     {
         var options = new DbContextOptionsBuilder<IngestionDbContext>()
@@ -259,6 +338,19 @@ public sealed class ProtectedApiTests(PostgreSqlFixture fixture) : IAsyncLifetim
     {
         Assert.Equal(status, response.StatusCode);
         Assert.Equal("application/problem+json", response.Content.Headers.ContentType?.MediaType);
+    }
+
+    private static string[] PropertyNames(JsonElement element) =>
+        [.. element.EnumerateObject().Select(property => property.Name).OrderBy(name => name, StringComparer.Ordinal)];
+
+    private static string[] Keys(params string[] names) =>
+        [.. names.OrderBy(name => name, StringComparer.Ordinal)];
+
+    private static float[] UnitVector(int dimensions)
+    {
+        var vector = new float[dimensions];
+        vector[0] = 1f;
+        return vector;
     }
 
     private sealed record ApiClient(Guid ServiceClientId, string Token);
@@ -297,6 +389,8 @@ public sealed class ProtectedApiFactory(string connectionString, string contentR
         builder.ConfigureServices(services =>
         {
             services.RemoveAll<IHostedService>();
+            services.RemoveAll<IEmbeddingProvider>();
+            services.AddSingleton<IEmbeddingProvider, SearchOnlyEmbeddingProvider>();
             services.RemoveAll<NpgsqlDataSource>();
             services.RemoveAll<IDbContextFactory<IngestionDbContext>>();
             services.AddSingleton(_ =>
@@ -317,5 +411,23 @@ public sealed class ProtectedApiFactory(string connectionString, string contentR
         {
             _rsa.Dispose();
         }
+    }
+}
+
+// Retrieval search needs an embedding provider that does not reach the real llama.cpp server. The stub returns
+// a unit vector so seeded chunk embeddings with the same vector score a zero cosine distance.
+internal sealed class SearchOnlyEmbeddingProvider : IEmbeddingProvider
+{
+    public Task<EmbeddingResponse> EmbedAsync(EmbeddingProfile profile, IReadOnlyList<string> inputs, CancellationToken cancellationToken)
+    {
+        var vectors = new List<float[]>(inputs.Count);
+        foreach (var _ in inputs)
+        {
+            var vector = new float[profile.Dimensions];
+            vector[0] = 1f;
+            vectors.Add(vector);
+        }
+
+        return Task.FromResult(new EmbeddingResponse(vectors));
     }
 }

@@ -7,9 +7,38 @@ internal static class AdminCredentialReadEndpoints
 {
     public static void MapAdminCredentialReadEndpoints(this RouteGroupBuilder group)
     {
-        group.MapPost("/clients/{clientId:guid}/credentials", IssueCredentialAsync);
-        group.MapGet("/clients/{clientId:guid}/credentials", ListCredentialsAsync);
-        group.MapGet("/credentials/{credentialId:guid}", GetCredentialAsync);
+        group.MapPost("/clients/{clientId:guid}/credentials", IssueCredentialAsync)
+            .WithName("issue_credential")
+            .DeclaresBody<AdminIssueCredentialRequest>("application/json", group.IsOpenApiGeneration())
+            .Produces<AdminCredentialDelivery>(StatusCodes.Status201Created)
+            .DeclaresProblem(
+                StatusCodes.Status400BadRequest,
+                "Bad request. The Idempotency-Key claim is missing, the JSON body is malformed or empty, the client id " +
+                "is empty, or the credential expiry is not in the future.")
+            .DeclaresProblem(
+                StatusCodes.Status404NotFound,
+                "Not found. The client does not exist.")
+            .DeclaresProblem(
+                StatusCodes.Status409Conflict,
+                "Conflict. The idempotency key was reused, a secret was already delivered for this request, or an " +
+                "issue is already in progress.",
+                retryAfterDescription: "Seconds to wait before retrying; when an issue is already in progress the " +
+                    "response carries Retry-After: 1.")
+            .DeclaresProblem(
+                StatusCodes.Status415UnsupportedMediaType,
+                "Unsupported content type. The handler only accepts application/json.");
+        group.MapGet("/clients/{clientId:guid}/credentials", ListCredentialsAsync)
+            .WithName("list_credentials")
+            .Produces<IReadOnlyList<AdminCredentialMetadata>>(StatusCodes.Status200OK)
+            .DeclaresProblem(
+                StatusCodes.Status404NotFound,
+                "Not found. The client does not exist.");
+        group.MapGet("/credentials/{credentialId:guid}", GetCredentialAsync)
+            .WithName("get_credential")
+            .Produces<AdminCredentialMetadata>(StatusCodes.Status200OK)
+            .DeclaresProblem(
+                StatusCodes.Status404NotFound,
+                "Not found. The credential does not exist.");
     }
 
     private static async Task<IResult> IssueCredentialAsync(

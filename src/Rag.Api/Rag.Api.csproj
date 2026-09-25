@@ -3,6 +3,17 @@
     <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
+    <!--
+      Build-time generation starts the app host, so it needs the generation environment: an ordinary build
+      (and any build that pulls this project in, e.g. `dotnet test Rag.sln`) must stay green and fast.
+
+        ASPNETCORE_ENVIRONMENT=OpenApiGeneration dotnet build src/Rag.Api/Rag.Api.csproj
+
+      writes docs/api/Rag.Api.json. Without that environment variable the target does not run at all.
+    -->
+    <OpenApiGenerateDocumentsOnBuild>false</OpenApiGenerateDocumentsOnBuild>
+    <OpenApiGenerateDocumentsOnBuild Condition="'$(ASPNETCORE_ENVIRONMENT)' == 'OpenApiGeneration'">true</OpenApiGenerateDocumentsOnBuild>
+    <OpenApiDocumentsDirectory>$(MSBuildProjectDirectory)/../../docs/api</OpenApiDocumentsDirectory>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../Rag.Application/Rag.Application.csproj" />
@@ -10,5 +21,7 @@
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" />
+    <PackageReference Include="Microsoft.AspNetCore.OpenApi" />
+    <PackageReference Include="Microsoft.Extensions.ApiDescription.Server" PrivateAssets="all" />
   </ItemGroup>
 </Project>

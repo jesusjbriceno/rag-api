@@ -7,8 +7,48 @@ internal static class AdminCredentialMutationEndpoints
 {
     public static void MapAdminCredentialMutationEndpoints(this RouteGroupBuilder group)
     {
-        group.MapPost("/credentials/{credentialId:guid}/rotate", RotateCredentialAsync);
-        group.MapPost("/credentials/{credentialId:guid}/revoke", RevokeCredentialAsync);
+        group.MapPost("/credentials/{credentialId:guid}/rotate", RotateCredentialAsync)
+            .WithName("rotate_credential")
+            .Produces<AdminCredentialDelivery>(StatusCodes.Status200OK)
+            .DeclaresHeader(
+                "If-Match",
+                required: true,
+                "The quoted current credential version to rotate, for example \"v3\". A missing or malformed value is " +
+                "rejected with 400.")
+            .DeclaresProblem(
+                StatusCodes.Status400BadRequest,
+                "Bad request. The Idempotency-Key claim is missing, the If-Match header is missing or malformed (the " +
+                "quoted version form \"v3\" is required), or the expected version is invalid.")
+            .DeclaresProblem(
+                StatusCodes.Status404NotFound,
+                "Not found. The credential does not exist.")
+            .DeclaresProblem(
+                StatusCodes.Status409Conflict,
+                "Conflict. The If-Match version does not match the current version, the credential is not active, the " +
+                "idempotency key was reused, or a rotation is already in progress.",
+                retryAfterDescription: "Seconds to wait before retrying; when a rotation is already in progress the " +
+                    "response carries Retry-After: 1.");
+        group.MapPost("/credentials/{credentialId:guid}/revoke", RevokeCredentialAsync)
+            .WithName("revoke_credential")
+            .Produces<AdminCredentialMetadata>(StatusCodes.Status200OK)
+            .DeclaresHeader(
+                "If-Match",
+                required: true,
+                "The quoted current credential version to revoke, for example \"v3\". A missing or malformed value is " +
+                "rejected with 400.")
+            .DeclaresProblem(
+                StatusCodes.Status400BadRequest,
+                "Bad request. The Idempotency-Key claim is missing, the If-Match header is missing or malformed (the " +
+                "quoted version form \"v3\" is required), or the expected version is invalid.")
+            .DeclaresProblem(
+                StatusCodes.Status404NotFound,
+                "Not found. The credential does not exist.")
+            .DeclaresProblem(
+                StatusCodes.Status409Conflict,
+                "Conflict. The If-Match version does not match the current version, the idempotency key was reused, " +
+                "or a revoke is already in progress.",
+                retryAfterDescription: "Seconds to wait before retrying; when a revoke is already in progress the " +
+                    "response carries Retry-After: 1.");
     }
 
     private static async Task<IResult> RotateCredentialAsync(

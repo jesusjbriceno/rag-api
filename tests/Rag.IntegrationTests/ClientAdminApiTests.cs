@@ -66,7 +66,9 @@ public sealed class ClientAdminApiTests(PostgreSqlFixture fixture) : IAsyncLifet
         var list = await SendAdminAsync(HttpMethod.Get, "/api/v1/admin/clients", null);
         Assert.Equal(HttpStatusCode.OK, list.StatusCode);
         var listJson = await ReadJsonAsync(list);
+        Assert.Equal(Keys("items", "nextCursor"), PropertyNames(listJson.RootElement));
         Assert.Contains(listJson.RootElement.GetProperty("items").EnumerateArray(), item => item.GetProperty("id").GetGuid() == clientId);
+        Assert.Equal(JsonValueKind.Null, listJson.RootElement.GetProperty("nextCursor").ValueKind);
 
         var detail = await SendAdminAsync(HttpMethod.Get, $"/api/v1/admin/clients/{clientId}", null);
         Assert.Equal(HttpStatusCode.OK, detail.StatusCode);
@@ -122,4 +124,10 @@ public sealed class ClientAdminApiTests(PostgreSqlFixture fixture) : IAsyncLifet
         using var document = await ReadJsonAsync(response);
         return document.RootElement.TryGetProperty("code", out var code) ? code.GetString() : null;
     }
+
+    private static string[] PropertyNames(JsonElement element) =>
+        [.. element.EnumerateObject().Select(property => property.Name).OrderBy(name => name, StringComparer.Ordinal)];
+
+    private static string[] Keys(params string[] names) =>
+        [.. names.OrderBy(name => name, StringComparer.Ordinal)];
 }

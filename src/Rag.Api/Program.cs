@@ -16,8 +16,12 @@ using Rag.Infrastructure;
 
 var builder = WebApplication.CreateBuilder(args);
 
+builder.Services.AddOpenApi(OpenApiDocumentContract.Configure);
+
+var openApiGeneration = builder.Environment.IsEnvironment(ApiEndpointSupport.OpenApiGenerationEnvironment);
+
 builder.Services.AddApplication();
-builder.Services.AddInfrastructure(builder.Configuration);
+builder.Services.AddInfrastructure(builder.Configuration, openApiGeneration);
 builder.Services.AddHistoricalIngestion();
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddJwtBearer(options =>
@@ -141,7 +145,10 @@ var informationalVersion = typeof(Program).Assembly
     .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
     ?? "unknown";
 
-app.MapGet("/api/v1/health", () => Results.Ok(new { status = "healthy", version = informationalVersion })).AllowAnonymous();
+app.MapGet("/api/v1/health", () => Results.Ok(new HealthResponse("healthy", informationalVersion)))
+    .WithName("get_health")
+    .Produces<HealthResponse>(StatusCodes.Status200OK)
+    .AllowAnonymous();
 app.MapPost("/api/v1/auth/token", async (TokenExchangeRequest request, CredentialExchangeHandler handler, CancellationToken cancellationToken) =>
     {
         var result = await handler.ExchangeScopedAsync(request.KeyId, request.Secret, request.Scope, cancellationToken);
@@ -149,10 +156,32 @@ app.MapPost("/api/v1/auth/token", async (TokenExchangeRequest request, Credentia
         {
             TokenExchangeOutcome.Unauthorized => Results.Problem(statusCode: StatusCodes.Status401Unauthorized, title: "Unauthorized"),
             TokenExchangeOutcome.InvalidScope => Results.Problem(statusCode: StatusCodes.Status400BadRequest, title: "invalid_scope"),
-            _ when result.Token!.Scope is null => Results.Ok(new { access_token = result.Token.Value, token_type = "Bearer", expires_in = 900 }),
-            _ => Results.Ok(new { access_token = result.Token!.Value, token_type = "Bearer", expires_in = 900, scope = result.Token.Scope }),
+            _ when result.Token!.Scope is null => Results.Ok(new TokenResponse(result.Token.Value, "Bearer", 900, null)),
+            _ => Results.Ok(new TokenResponse(result.Token!.Value, "Bearer", 900, result.Token.Scope)),
         };
     })
+    .WithName("exchange_token")
+    .DeclaresBody<TokenExchangeRequest>("application/json", openApiGeneration)
+    .Produces<TokenResponse>(StatusCodes.Status200OK)
+    .DeclaresProblem(
+        StatusCodes.Status400BadRequest,
+        "Bad request. The handler answers application/problem+json titled \"invalid_scope\" when the requested " +
+        "scope is unknown; the framework's bodyless rejection of a malformed or oversized request body uses the " +
+        "same status with no response body.")
+    .DeclaresProblem(
+        StatusCodes.Status401Unauthorized,
+        "Unauthorized. The credential key id is unknown or the secret does not match; the handler answers " +
+        "application/problem+json titled \"Unauthorized\".")
+    .DeclaresProblem(
+        StatusCodes.Status415UnsupportedMediaType,
+        "Unsupported content type. The framework binds the request body as application/json; any other content type " +
+        "is rejected before the handler runs, with no response body.",
+        hasBody: false)
+    .DeclaresProblem(
+        StatusCodes.Status429TooManyRequests,
+        "Too many requests. The credential exchange is limited to five requests per minute per caller; the rate " +
+        "limiter answers 429 with no response body.",
+        hasBody: false)
     .AllowAnonymous()
     .RequireRateLimiting("credential-exchange");
 
@@ -173,7 +202,18 @@ app.MapPost("/api/v1/collections", async (HttpContext context, CreateCollectionH
         {
             return ApiEndpointSupport.InvalidInput();
         }
-    });
+    })
+    .WithName("create_collection")
+    .DeclaresBody<CreateCollectionRequest>("application/json", openApiGeneration)
+    .Produces<CollectionRepresentation>(StatusCodes.Status201Created)
+    .DeclaresProblem(
+        StatusCodes.Status400BadRequest,
+        "Bad request. The JSON body is malformed or empty, or the collection name is invalid; the handler answers " +
+        "application/problem+json titled \"Invalid input\".")
+    .DeclaresProblem(
+        StatusCodes.Status415UnsupportedMediaType,
+        "Unsupported content type. The handler only accepts application/json and answers application/problem+json " +
+        "titled \"Unsupported content type\".");
 
 app.MapPost("/api/v1/collections/{collectionId:guid}/ingestions:txt", async (
     Guid collectionId,
@@ -198,7 +238,7 @@ app.MapPost("/api/v1/collections/{collectionId:guid}/ingestions:txt", async (
                     payload.Value.ExternalReference),
                 cancellationToken);
             return Results.Json(
-                new { document_id = result.DocumentId, document_version_id = result.DocumentVersionId, operation_id = result.OperationId },
+                new TxtIngestionResponse(result.DocumentId, result.DocumentVersionId, result.OperationId),
                 statusCode: result.IsDuplicate ? StatusCodes.Status200OK : StatusCodes.Status202Accepted);
         }
         catch (ResourceNotFoundException)
@@ -209,7 +249,27 @@ app.MapPost("/api/v1/collections/{collectionId:guid}/ingestions:txt", async (
         {
             return ApiEndpointSupport.InvalidInput();
         }
-    });
+    })
+    .WithName("accept_txt_ingestion")
+    .DeclaresBody<TxtIngestionRequest>("application/json", openApiGeneration)
+    .Produces<TxtIngestionResponse>(StatusCodes.Status202Accepted)
+    .Produces<TxtIngestionResponse>(StatusCodes.Status200OK)
+    .DeclaresProblem(
+        StatusCodes.Status400BadRequest,
+        "Bad request. The JSON body is malformed or empty, or the ingestion input is invalid; the handler answers " +
+        "application/problem+json titled \"Invalid input\".")
+    .DeclaresProblem(
+        StatusCodes.Status404NotFound,
+        "Not found. The collection does not exist or does not belong to the caller; the handler answers " +
+        "application/problem+json titled \"Not found\".")
+    .DeclaresProblem(
+        StatusCodes.Status413PayloadTooLarge,
+        "Request body too large. The body exceeds 1,048,576 bytes, whether declared through Content-Length or " +
+        "observed while streaming; the handler answers application/problem+json titled \"Request body too large\".")
+    .DeclaresProblem(
+        StatusCodes.Status415UnsupportedMediaType,
+        "Unsupported content type. The handler only accepts application/json and answers application/problem+json " +
+        "titled \"Unsupported content type\".");
 
 app.MapGet("/api/v1/collections/{collectionId:guid}/operations/{operationId:guid}", async (
     Guid collectionId,
@@ -221,21 +281,25 @@ app.MapGet("/api/v1/collections/{collectionId:guid}/operations/{operationId:guid
         try
         {
             var operation = await handler.HandleAsync(ApiEndpointSupport.GetClientId(context.User), collectionId, operationId, cancellationToken);
-            return Results.Ok(new
-            {
-                id = operation.Id,
-                status = operation.Status.ToString().ToLowerInvariant(),
-                created_at = operation.CreatedAt,
-                started_at = operation.StartedAt,
-                completed_at = operation.CompletedAt,
-                failure_stage = operation.FailureStage,
-            });
+            return Results.Ok(new OperationStatusResponse(
+                operation.Id,
+                operation.Status.ToString().ToLowerInvariant(),
+                operation.CreatedAt,
+                operation.StartedAt,
+                operation.CompletedAt,
+                operation.FailureStage));
         }
         catch (ResourceNotFoundException)
         {
             return ApiEndpointSupport.NotFound();
         }
-    });
+    })
+    .WithName("get_operation_status")
+    .Produces<OperationStatusResponse>(StatusCodes.Status200OK)
+    .DeclaresProblem(
+        StatusCodes.Status404NotFound,
+        "Not found. The operation does not exist or does not belong to the caller; the handler answers " +
+        "application/problem+json titled \"Not found\".");
 
 app.MapPost("/api/v1/retrieval:search", async (HttpContext context, SemanticRetrievalHandler handler, CancellationToken cancellationToken) =>
     {
@@ -268,7 +332,26 @@ app.MapPost("/api/v1/retrieval:search", async (HttpContext context, SemanticRetr
         {
             return ApiEndpointSupport.InvalidInput();
         }
-    });
+    })
+    .WithName("retrieval_search")
+    .DeclaresBody<RetrievalSearchRequest>("application/json", openApiGeneration)
+    .Produces<IReadOnlyList<SemanticRetrievalMatch>>(StatusCodes.Status200OK)
+    .DeclaresProblem(
+        StatusCodes.Status400BadRequest,
+        "Bad request. The JSON body is malformed or empty, or the query is invalid; the handler answers " +
+        "application/problem+json titled \"Invalid input\".")
+    .DeclaresProblem(
+        StatusCodes.Status404NotFound,
+        "Not found. One of the requested collections does not exist or does not belong to the caller; the handler " +
+        "answers application/problem+json titled \"Not found\".")
+    .DeclaresProblem(
+        StatusCodes.Status415UnsupportedMediaType,
+        "Unsupported content type. The handler only accepts application/json and answers application/problem+json " +
+        "titled \"Unsupported content type\".")
+    .DeclaresProblem(
+        StatusCodes.Status422UnprocessableEntity,
+        "Unprocessable entity. The requested collections use incompatible embedding profiles; the handler answers " +
+        "application/problem+json titled \"Incompatible embedding profiles\".");
 
 if (builder.Configuration.GetValue<bool>("AdminPlane:Enabled"))
 {
@@ -305,6 +388,10 @@ public sealed record RetrievalSearchRequest(
 public static class ApiEndpointSupport
 {
     public const int MaxIngestionBodyBytes = 1_048_576;
+
+    // Build-time document generation ("GetDocument.Insider") starts this host; this environment keeps the
+    // generation pass free of PostgreSQL and of production secrets. See src/Rag.Api/Rag.Api.csproj.
+    public const string OpenApiGenerationEnvironment = "OpenApiGeneration";
 
     public static IResult InvalidInput() => Results.Problem(statusCode: StatusCodes.Status400BadRequest, title: "Invalid input");
 

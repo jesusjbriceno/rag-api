@@ -79,6 +79,28 @@ public sealed class CredentialMutationAdminApiTests(PostgreSqlFixture fixture) :
         Assert.Equal([HttpStatusCode.OK, HttpStatusCode.Conflict], statuses);
     }
 
+    [Fact]
+    public async Task Credential_mutation_responses_pin_the_credential_and_delivery_key_sets()
+    {
+        var credentialId = await IssueCredentialAsync();
+
+        var rotated = await SendAdminAsync(HttpMethod.Post, $"/api/v1/admin/credentials/{credentialId}/rotate", null, ifMatch: "\"v1\"");
+        Assert.Equal(HttpStatusCode.OK, rotated.StatusCode);
+        using var rotatedJson = await ReadJsonAsync(rotated);
+        Assert.Equal(Keys("credential", "secret"), PropertyNames(rotatedJson.RootElement));
+        var rotatedCredential = rotatedJson.RootElement.GetProperty("credential");
+        Assert.Equal(CredentialKeys(), PropertyNames(rotatedCredential));
+        Assert.Equal("active", rotatedCredential.GetProperty("state").GetString());
+        Assert.False(string.IsNullOrWhiteSpace(rotatedJson.RootElement.GetProperty("secret").GetString()));
+
+        var revoked = await SendAdminAsync(HttpMethod.Post, $"/api/v1/admin/credentials/{credentialId}/revoke", null, ifMatch: "\"v2\"");
+        Assert.Equal(HttpStatusCode.OK, revoked.StatusCode);
+        using var revokedJson = await ReadJsonAsync(revoked);
+        Assert.Equal(CredentialKeys(), PropertyNames(revokedJson.RootElement));
+        Assert.Equal("revoked", revokedJson.RootElement.GetProperty("state").GetString());
+        Assert.Equal(JsonValueKind.String, revokedJson.RootElement.GetProperty("revokedAt").ValueKind);
+    }
+
     private async Task<Guid> IssueCredentialAsync()
     {
         var client = await SendAdminAsync(HttpMethod.Post, "/api/v1/admin/clients", $"{{\"name\":\"credential-mutation-{Guid.NewGuid():N}\"}}");
@@ -138,4 +160,13 @@ public sealed class CredentialMutationAdminApiTests(PostgreSqlFixture fixture) :
         using var document = await ReadJsonAsync(response);
         return document.RootElement.TryGetProperty("code", out var code) ? code.GetString() : null;
     }
+
+    private static string[] PropertyNames(JsonElement element) =>
+        [.. element.EnumerateObject().Select(property => property.Name).OrderBy(name => name, StringComparer.Ordinal)];
+
+    private static string[] Keys(params string[] names) =>
+        [.. names.OrderBy(name => name, StringComparer.Ordinal)];
+
+    private static string[] CredentialKeys() =>
+        Keys("id", "clientId", "keyId", "description", "version", "state", "createdAt", "expiresAt", "lastRotatedAt", "revokedAt");
 }

@@ -50,19 +50,26 @@ public sealed class CredentialReadAdminApiTests(PostgreSqlFixture fixture) : IAs
         var issue = await SendAdminAsync(HttpMethod.Post, $"/api/v1/admin/clients/{clientId}/credentials", "{}");
         Assert.Equal(HttpStatusCode.Created, issue.StatusCode);
         var issuedJson = await ReadJsonAsync(issue);
-        var credentialId = issuedJson.RootElement.GetProperty("credential").GetProperty("id").GetGuid();
+        Assert.Equal(Keys("credential", "secret"), PropertyNames(issuedJson.RootElement));
+        var issuedCredential = issuedJson.RootElement.GetProperty("credential");
+        Assert.Equal(CredentialKeys(), PropertyNames(issuedCredential));
+        Assert.Equal("active", issuedCredential.GetProperty("state").GetString());
+        Assert.Equal(JsonValueKind.Null, issuedCredential.GetProperty("expiresAt").ValueKind);
+        var credentialId = issuedCredential.GetProperty("id").GetGuid();
         Assert.False(string.IsNullOrWhiteSpace(issuedJson.RootElement.GetProperty("secret").GetString()));
 
         var list = await SendAdminAsync(HttpMethod.Get, $"/api/v1/admin/clients/{clientId}/credentials", null);
         Assert.Equal(HttpStatusCode.OK, list.StatusCode);
         var listJson = await ReadJsonAsync(list);
         Assert.Single(listJson.RootElement.EnumerateArray());
+        Assert.Equal(CredentialKeys(), PropertyNames(listJson.RootElement[0]));
         Assert.Equal(credentialId, listJson.RootElement[0].GetProperty("id").GetGuid());
         Assert.False(listJson.RootElement[0].TryGetProperty("secret", out _));
 
         var get = await SendAdminAsync(HttpMethod.Get, $"/api/v1/admin/credentials/{credentialId}", null);
         Assert.Equal(HttpStatusCode.OK, get.StatusCode);
         var getJson = await ReadJsonAsync(get);
+        Assert.Equal(CredentialKeys(), PropertyNames(getJson.RootElement));
         Assert.Equal(credentialId, getJson.RootElement.GetProperty("id").GetGuid());
         Assert.False(getJson.RootElement.TryGetProperty("secret", out _));
     }
@@ -112,4 +119,13 @@ public sealed class CredentialReadAdminApiTests(PostgreSqlFixture fixture) : IAs
         var stream = await response.Content.ReadAsStreamAsync();
         return await JsonDocument.ParseAsync(stream);
     }
+
+    private static string[] PropertyNames(JsonElement element) =>
+        [.. element.EnumerateObject().Select(property => property.Name).OrderBy(name => name, StringComparer.Ordinal)];
+
+    private static string[] Keys(params string[] names) =>
+        [.. names.OrderBy(name => name, StringComparer.Ordinal)];
+
+    private static string[] CredentialKeys() =>
+        Keys("id", "clientId", "keyId", "description", "version", "state", "createdAt", "expiresAt", "lastRotatedAt", "revokedAt");
 }
