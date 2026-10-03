@@ -1,5 +1,8 @@
+# Local-only overlay for compose.coolify.yaml. Service keys must stay in sync
+# with the prefixed names in the production Compose file (see the header of
+# compose.coolify.yaml for why every service is prefixed with "rag-").
 services:
-  api:
+  rag-api:
     build:
       context: .
       dockerfile: Dockerfile
@@ -8,7 +11,7 @@ services:
     ports:
       - 127.0.0.1:${RAG_API_PORT:-8080}:8080
 
-  migrate:
+  rag-migrate:
     build:
       context: .
       dockerfile: Dockerfile
