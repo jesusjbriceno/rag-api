@@ -100,10 +100,10 @@ Rotate keys by first deploying the new public validation key alongside the old o
 
 1. Deploy the RAG Service Stack with no domains and no port mappings.
 2. Enable **Connect to Predefined Network** on both the RAG stack and the approved client stack.
-3. Copy Coolify's generated full API service name, such as `api-<resource-uuid>`.
+3. Copy Coolify's generated full API service name, such as `rag-api-<resource-uuid>`.
 4. Configure the client with `RAG_API_BASE_URL=http://<actual-full-api-service-name>:8080` and redeploy it.
 
-This is the only cross-stack path. PostgreSQL and llama.cpp remain internal; do not target them from n8n or another client stack.
+This is the only cross-stack path. Every container of the stack joins Coolify's shared predefined network, so the data services are technically resolvable from any stack joined to it; keeping them off the client surface is a policy, not a network boundary. Never resolve `rag-postgres` or `rag-llama-cpp` from a client stack, and never target the API by a bare service name.
 
 ### Health and recovery
 
@@ -113,8 +113,9 @@ An external scheduler can run `scripts/backup-rag.sh`, but the scheduler owns re
 
 ## Delivery boundaries
 
-- Production Compose intentionally has no `ports`, `domains`, or custom `networks` declarations.
-- PostgreSQL and llama.cpp are internal stack dependencies; external client stacks receive access only to the API when connected through Coolify's predefined network.
+- Production Compose intentionally has no `ports`, `domains`, or custom `networks` declarations. Custom networks are forbidden because Coolify's proxy only joins the resource-specific network, so they cause intermittent HTTPS outages; the Compose validator rejects them.
+- Every Compose service is prefixed with `rag-` so its name cannot collide with Coolify's own containers (such as `coolify-db`) on the shared predefined network; Coolify documents that prefixed names prevent collisions.
+- External client stacks receive access only to the API when connected through Coolify's predefined network; PostgreSQL and llama.cpp stay off the client integration surface by policy.
 - The runtime is CPU-only and uses a locally mounted, verified GGUF. GPU/NVIDIA runtime configuration is not part of this stack.
 - General-infrastructure model runtimes and automation remain outside this RAG delivery boundary.
 
