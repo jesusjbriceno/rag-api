@@ -1,0 +1,57 @@
+name: Feature request
+description: Propose a new capability or improvement.
+title: "[Feature]: "
+labels:
+  - "type:feature"
+  - "enhancement"
+body:
+  - type: textarea
+    id: problem-outcome
+    attributes:
+      label: Problem and desired outcome
+      description: Describe the problem to solve and the outcome this feature should achieve.
+      placeholder: What problem exists, and what should be different after this feature is delivered?
+    validations:
+      required: true
+  - type: textarea
+    id: scope-acceptance-criteria
+    attributes:
+      label: Scope and acceptance criteria
+      description: Define the intended scope and the observable conditions for acceptance.
+      placeholder: |
+        Scope:
+        -
+
+        Acceptance criteria:
+        -
+    validations:
+      required: true
+  - type: textarea
+    id: user-impact
+    attributes:
+      label: User impact
+      description: Identify who is affected and how this feature changes their experience or workflow.
+      placeholder: Which users are affected, and what benefit or change will they experience?
+    validations:
+      required: true
+  - type: textarea
+    id: risks-dependencies
+    attributes:
+      label: Risks and dependencies
+      description: List known risks, constraints, integrations, or dependencies. State "None known" if applicable.
+      placeholder: |
+        Risks or constraints:
+        -
+
+        Dependencies or integrations:
+        -
+    validations:
+      required: true
+  - type: checkboxes
+    id: duplicate-search
+    attributes:
+      label: Duplicate search
+      description: Confirm that this request does not duplicate an existing issue.
+      options:
+        - label: I have searched existing issues and did not find a duplicate request.
+          required: true

@@ -1,15 +1,21 @@
 # Deploy the private RAG stack with Coolify
 
-Deploy this Compose stack privately, then let approved client stacks reach only the API over Coolify's predefined network. PostgreSQL and llama.cpp remain stack-internal.
+Deploy this Compose stack privately, then let approved client stacks reach the API over Coolify's predefined network. Every container of the stack joins that shared network, so keeping PostgreSQL and llama.cpp off the client integration surface is a policy, not an enforced network boundary.
 
 ## Quick path
 
 1. Create a Coolify **Service Stack** from this repository using `compose.coolify.yaml`.
 2. Add the required deployment secrets and matching immutable image references in Coolify (see [Image publication, verification, and rollback](#image-publication-verification-and-rollback)); deploy without domains or port mappings.
-3. Wait for `model-download` and `migrate` to complete successfully; llama.cpp and then the API start. The API must become ready.
+3. Wait for `rag-model-download` and `rag-migrate` to complete successfully; llama.cpp and then the API start. The API must become ready.
 4. Enable **Connect to Predefined Network** on both the RAG and client service stacks. Put the Coolify-generated full API service hostname in the client stack's environment, for example `RAG_API_BASE_URL=http://rag-api-<resource-uuid>:8080`.
 
-Coolify creates an isolated network for each stack. Its predefined-network option makes cross-stack communication possible using generated full service names; do not add a Compose `networks` section to work around that isolation.
+## Shared network, prefixed names, and no custom networks
+
+When **Connect to Predefined Network** is enabled, Coolify attaches every container of this stack to its shared destination network; it does not alter the Compose file (coollabsio/coolify#5597). Every service name in `compose.coolify.yaml` is therefore resolvable from every other stack joined to that network — including the data services.
+
+An unprefixed name such as `postgres` collides on that network with Coolify's own database container `coolify-db`, and Docker DNS round-robins between them (coollabsio/coolify#5160). That is why every service in `compose.coolify.yaml` is prefixed with `rag-` (`rag-postgres`, `rag-model-download`, `rag-llama-cpp`, `rag-migrate`, `rag-api`), matching Coolify's documented mitigation that "Names can be prefixed to prevent collisions".
+
+**Do not declare custom networks.** Adding a `networks:` section to `compose.coolify.yaml` is not a valid isolation fix: Coolify's proxy only joins the resource-specific network, so custom networks cause intermittent HTTPS outages (https://coolify.io/docs/applications/build-packs/docker-compose, "Do Not Define Custom Networks"). `scripts/validate-coolify-compose.py` therefore rejects any `networks:` declaration other than the implicit default.
 
 ## Secret inventory
 
@@ -50,9 +56,9 @@ The service accepts only this profile:
 | SHA-256 | `06507c7b42688469c4e7298b0a1e16deff06caf291cf0a5b278c308249c3e439` |
 | Dimensions | `1024` |
 
-`model-download` is the only acquisition step. It uses a pinned downloader image and fetches only the pinned HTTPS source, verifies size and SHA-256 before atomically publishing the GGUF, and atomically writes `/models/Qwen3-Embedding-0.6B-Q8_0.manifest`. The manifest records source URL, revision, filename, byte count, checksum, and download time.
+`rag-model-download` is the only acquisition step. It uses a pinned downloader image and fetches only the pinned HTTPS source, verifies size and SHA-256 before atomically publishing the GGUF, and atomically writes `/models/Qwen3-Embedding-0.6B-Q8_0.manifest`. The manifest records source URL, revision, filename, byte count, checksum, and download time.
 
-The `llama-cpp` service uses a pinned server image, mounts `/models` read-only, and runs `--offline --model /models/Qwen3-Embedding-0.6B-Q8_0.gguf --embedding --pooling last --embd-normalize 2 --device none`. It does not download models, use a GPU runtime, expose a public port, or provide a client-facing boundary.
+The `rag-llama-cpp` service uses a pinned server image, mounts `/models` read-only, and runs `--offline --model /models/Qwen3-Embedding-0.6B-Q8_0.gguf --embedding --pooling last --embd-normalize 2 --device none`. It does not download models, use a GPU runtime, expose a public port, or provide a client-facing boundary.
 
 ## Direct-cutover stop and later reindex
 
@@ -63,23 +69,23 @@ Do not bypass the migration with direct SQL. A later release must provide a deli
 ## Private cross-stack procedure
 
 1. Keep all RAG services without domains and without host-published ports. `compose.coolify.yaml` already enforces this.
-2. Deploy the RAG stack. Coolify gives the API service a generated full hostname such as `api-<resource-uuid>`; copy the actual name from Coolify rather than guessing it.
+2. Deploy the RAG stack. Coolify gives the API service a generated full hostname such as `rag-api-<resource-uuid>`; copy the actual name from Coolify rather than guessing it.
 3. In the RAG service stack settings, enable **Connect to Predefined Network**.
 4. In each approved client stack, enable the same option.
 5. Set that client's API base URL to `http://<actual-full-api-service-name>:8080`, redeploy it, and authenticate with issued client credentials.
 
-Do not use `postgres` or `llama-cpp` from client stacks. Those names resolve only inside the RAG stack and are intentionally not exposed as a client integration surface.
+Client stacks must never resolve the data services by a bare or prefixed name. Because the whole stack shares Coolify's predefined network, `rag-postgres` and `rag-llama-cpp` are technically resolvable from any stack joined to it; keeping them off the client integration surface is a policy enforced by review, credentials, and client configuration — not by a network boundary. Coolify's documented mitigation for shared-network name collisions is that "Names can be prefixed to prevent collisions"; it does not firewall them.
 
 ## Startup and health semantics
 
 | Service | Gate | Meaning |
 | --- | --- | --- |
-| `postgres` | `pg_isready` | PostgreSQL accepts connections |
-| `model-download` | HTTPS download, byte count, SHA-256, atomic publication | The immutable model artifact and manifest are available |
-| `migrate` | `Rag.Operator migrate` | EF Core applies pending migrations idempotently or explicitly stops the cutover |
-| `llama-cpp` | Local verified GGUF | CPU-only embedding runtime starts offline |
-| `api` liveness | `/api/v1/health/live` | The API process is alive; no dependencies are checked |
-| `api` readiness | `/api/v1/health/ready` | PostgreSQL is reachable and llama.cpp `GET /health` returns a valid `200` ready response |
+| `rag-postgres` | `pg_isready` | PostgreSQL accepts connections |
+| `rag-model-download` | HTTPS download, byte count, SHA-256, atomic publication | The immutable model artifact and manifest are available |
+| `rag-migrate` | `Rag.Operator migrate` | EF Core applies pending migrations idempotently or explicitly stops the cutover |
+| `rag-llama-cpp` | Local verified GGUF | CPU-only embedding runtime starts offline |
+| `rag-api` liveness | `/api/v1/health/live` | The API process is alive; no dependencies are checked |
+| `rag-api` readiness | `/api/v1/health/ready` | PostgreSQL is reachable and llama.cpp `GET /health` returns a valid `200` ready response |
 
 Readiness treats llama.cpp `503` loading responses, transport failures, and malformed `200` responses as unhealthy. It does not generate an embedding or trigger model download. Both health routes are anonymous. Every collection, ingestion, operation, and retrieval route remains JWT-protected.
 

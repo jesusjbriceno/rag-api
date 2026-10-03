@@ -1,5 +1,15 @@
+# Every service name is prefixed with "rag-": Coolify attaches every container
+# of a Docker Compose resource to the shared destination network when "Connect
+# To Predefined Network" is enabled, and it does not alter the Compose file
+# (coollabsio/coolify#5597). An unprefixed name such as "postgres" collides with
+# Coolify's own coolify-db container on that network, and Docker DNS
+# round-robins between them (coollabsio/coolify#5160). Coolify's documented
+# mitigation is that "Names can be prefixed to prevent collisions". Do NOT add a
+# networks: section instead: Coolify's proxy only joins the resource-specific
+# network, so custom networks cause intermittent HTTPS outages
+# (https://coolify.io/docs/applications/build-packs/docker-compose).
 services:
-  postgres:
+  rag-postgres:
     image: pgvector/pgvector:pg16
     environment:
       POSTGRES_DB: ${POSTGRES_DB}
@@ -16,17 +26,21 @@ services:
       start_period: 10s
     restart: unless-stopped
 
-  model-download:
+  rag-model-download:
     image: curlimages/curl@sha256:94e9e444bcba979c2ea12e27ae39bee4cd10bc7041a472c4727a558e213744e6
     user: "0:0"
     entrypoint: ["/bin/sh", "/scripts/download-llamacpp-model.sh"]
     read_only: true
     volumes:
       - llama-cpp-model:/models
-      - ./scripts/download-llamacpp-model.sh:/scripts/download-llamacpp-model.sh:ro
+      # Directory mount, not a single-file bind: Docker auto-creates a missing
+      # single-file bind source as a directory before the repository checkout,
+      # which left this mount empty in the first production deployment while
+      # rag-model-download exited 0 having published nothing.
+      - ./scripts:/scripts:ro
     restart: "no"
 
-  llama-cpp:
+  rag-llama-cpp:
     image: ghcr.io/ggml-org/llama.cpp@sha256:c005e79321f8e5731ec49a7f736aaeaac9465926c1e8f4c199c1d8a8996f26ef
     command:
       ["--model", "/models/Qwen3-Embedding-0.6B-Q8_0.gguf", "--embedding", "--pooling", "last", "--embd-normalize", "2", "--device", "none", "--offline", "--host", "0.0.0.0", "--port", "8080"]
@@ -34,18 +48,18 @@ services:
     volumes:
       - llama-cpp-model:/models:ro
     depends_on:
-      model-download:
+      rag-model-download:
         condition: service_completed_successfully
     restart: unless-stopped
 
-  migrate:
+  rag-migrate:
     image: ghcr.io/jesusjbriceno/rag-operator${RAG_OPERATOR_IMAGE_REFERENCE}
     pull_policy: always
     command: ["migrate"]
     environment: &rag-environment
-      ConnectionStrings__Rag: Host=postgres;Port=5432;Database=${POSTGRES_DB};Username=${POSTGRES_USER};Password=${POSTGRES_PASSWORD}
+      ConnectionStrings__Rag: Host=rag-postgres;Port=5432;Database=${POSTGRES_DB};Username=${POSTGRES_USER};Password=${POSTGRES_PASSWORD}
       ContentStore__RootPath: /app/content
-      LlamaCpp__BaseUrl: http://llama-cpp:8080/
+      LlamaCpp__BaseUrl: http://rag-llama-cpp:8080/
       Jwt__Issuer: ${JWT__ISSUER}
       Jwt__Audience: ${JWT__AUDIENCE}
       Jwt__CurrentSigningKey__KeyId: ${JWT__CURRENT_SIGNING_KEY__KEY_ID}
@@ -53,20 +67,20 @@ services:
       Jwt__ValidationKeys__0__KeyId: ${JWT__VALIDATION_KEYS__0__KEY_ID}
       Jwt__ValidationKeys__0__PublicKeyPem: ${JWT__VALIDATION_KEYS__0__PUBLIC_KEY_PEM}
     depends_on:
-      postgres:
+      rag-postgres:
         condition: service_healthy
     restart: "no"
 
-  api:
+  rag-api:
     image: ghcr.io/jesusjbriceno/rag-api${RAG_API_IMAGE_REFERENCE}
     pull_policy: always
     environment: *rag-environment
     volumes:
       - rag-content:/app/content
     depends_on:
-      migrate:
+      rag-migrate:
         condition: service_completed_successfully
-      llama-cpp:
+      rag-llama-cpp:
         condition: service_started
     healthcheck:
       test: ["CMD-SHELL", "curl --fail --silent --show-error http://127.0.0.1:8080/api/v1/health/ready"]
