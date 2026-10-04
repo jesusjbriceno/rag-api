@@ -24,17 +24,17 @@ image publication, signing, attestation or promotion logic. No change to the com
 
 ## Tasks
 
-- [ ] 1. Remove the two live gate jobs from `ci-release.yml` and set
+- [x] 1. Remove the two live gate jobs from `ci-release.yml` and set
   `release.needs` to `completion` and `companion` only, so the release record is no longer
   blocked by gates that require infrastructure this delivery does not include.
-- [ ] 2. Move those two gates into a dedicated `workflow_dispatch` workflow with their own
+- [x] 2. Move those two gates into a dedicated `workflow_dispatch` workflow with their own
   minimal win-x64 build (checkout, setup-dotnet, publish), plus a header comment recording
   that they require the seven `COMPANION_*` secrets and a live BFF, and that they must be
   re-coupled to the release path when the companion delivery lands.
-- [ ] 3. Align `README.md` with the workflow set and the release behaviour.
-- [ ] 4. Verify locally: `actionlint` clean, YAML parses, and the release job's dependency
+- [x] 3. Align `README.md` with the workflow set and the release behaviour.
+- [x] 4. Verify locally: `actionlint` clean, YAML parses, and the release job's dependency
   set no longer contains either gate.
-- [ ] 5. Publish `v0.1.0`: confirm `ci-release` succeeds, the Release record exists, the
+- [x] 5. Publish `v0.1.0`: confirm `ci-release` succeeds, the Release record exists, the
   companion asset is attached and the published images carry validated digests.
 
 ## Out of scope
