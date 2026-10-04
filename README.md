@@ -58,6 +58,8 @@ Three least-privilege GitHub Actions workflows publish only verified images to G
 
 Every `linux/amd64` and native `linux/arm64` image is independently Trivy-scanned (HIGH/CRITICAL blocks publication), keyless-signed with cosign, and carries a SPDX SBOM plus SLSA provenance attestation. After both platform jobs pass, the ordinary immutable tag becomes a signed multi-platform OCI index with SLSA provenance. The `-amd64` and `-arm64` suffix tags are traceability references; deployments use the ordinary tag or its index digest.
 
+Companion validation is separate: the live BFF contract and clean-machine 4-format smoke run in their own manually triggered workflow (`.github/workflows/ci-companion-gates.yml`) and do not gate the release record. The companion build and its release attachment stay in `ci-release.yml`.
+
 Verify a release image before deploying it:
 
 ```bash
