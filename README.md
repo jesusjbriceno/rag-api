@@ -58,6 +58,8 @@ Three least-privilege GitHub Actions workflows publish only verified images to G
 
 Every `linux/amd64` and native `linux/arm64` image is independently Trivy-scanned (HIGH/CRITICAL blocks publication), keyless-signed with cosign, and carries a SPDX SBOM plus SLSA provenance attestation. After both platform jobs pass, the ordinary immutable tag becomes a signed multi-platform OCI index with SLSA provenance. The `-amd64` and `-arm64` suffix tags are traceability references; deployments use the ordinary tag or its index digest.
 
+Release tags are never pruned. The retention job removes only package versions whose tags are exclusively staging tags (`staging-*`) and older than 24 hours. This restriction exists because promotion applies the release tag to the same GHCR version that was first published under the staging tag, so one version carries both tags; the GHCR API cannot remove a single tag from a version, so deleting a version carrying a release tag would delete the release tag with it and strand any deployment pinned to that image.
+
 Companion validation is separate: the live BFF contract and clean-machine 4-format smoke run in their own manually triggered workflow (`.github/workflows/ci-companion-gates.yml`) and do not gate the release record. The companion build and its release attachment stay in `ci-release.yml`.
 
 Verify a release image before deploying it:

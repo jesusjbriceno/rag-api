@@ -52,7 +52,7 @@ variables present with the expected shapes).
 - [x] 5. Local verification: `scripts/test-validate-coolify-compose.py` 13/13 OK;
   `scripts/validate-coolify-compose.sh` passes; `docker compose config` exit 0 for both
   the production file alone and the production file plus `compose.dev.yaml`.
-- [ ] 6. Hand the infrastructure operator a bounded runbook: redeploy from a clean stack
+- [x] 6. Hand the infrastructure operator a bounded runbook: redeploy from a clean stack
   state, plus the exact read-only checks that prove the collision is gone
   (`docker network inspect coolify`) and that `/ready` still returns 200.
 

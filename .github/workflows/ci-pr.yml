@@ -51,6 +51,7 @@ jobs:
           bash scripts/test-ci-publication-marker.sh
           bash scripts/test-ci-publication-verifier.sh
           bash scripts/test-ci-multiarch-index.sh
+          bash scripts/test-ci-prune-staging-versions.sh
 
       - name: Lint workflows with actionlint
         env:
