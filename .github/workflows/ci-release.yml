@@ -511,26 +511,8 @@ jobs:
         run: |
           set -Eeuo pipefail
 
-          owner="jesusjbriceno"
-          now="$(date -u +%s)"
-          staging_min_age_seconds=86400
-
-          prune_staging() {
-            local package="$1"
-            gh api --paginate "/users/${owner}/packages/container/${package}/versions" \
-              | jq -r --argjson now "${now}" --argjson min_age "${staging_min_age_seconds}" '
-                  .[]? | select((.metadata.container.tags // []) | any(startswith("staging-")))
-                  | select((($now - (.created_at | fromdateiso8601)) > $min_age))
-                  | .id
-                ' \
-              | while read -r version_id; do
-                  gh api -X DELETE "/users/${owner}/packages/container/${package}/versions/${version_id}" >/dev/null
-                  echo "Deleted stale staging version ${version_id} of ${package}"
-                done
-          }
-
-          prune_staging "rag-api"
-          prune_staging "rag-operator"
+          bash scripts/ci-prune-staging-versions.sh prune jesusjbriceno rag-api 86400
+          bash scripts/ci-prune-staging-versions.sh prune jesusjbriceno rag-operator 86400
 
   # --- Companion release build ---
   # The companion is a win-x64 self-contained CLI. This workflow builds it,
