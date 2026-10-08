@@ -2,12 +2,14 @@
 
 Deploy this Compose stack privately, then let approved client stacks reach the API over Coolify's predefined network. Every container of the stack joins that shared network, so keeping PostgreSQL and llama.cpp off the client integration surface is a policy, not an enforced network boundary.
 
+This guide is the Coolify adapter of the [environment contract](environment-contract.md). The stack contract and the client integration contract live in that document; everything here is how one platform instantiates them, and no part of it is required by the application code.
+
 ## Quick path
 
 1. Create a Coolify **Service Stack** from this repository using `compose.coolify.yaml`.
 2. Add the required deployment secrets and matching immutable image references in Coolify (see [Image publication, verification, and rollback](#image-publication-verification-and-rollback)); deploy without domains or port mappings.
 3. Wait for `rag-model-download` and `rag-migrate` to complete successfully; llama.cpp and then the API start. The API must become ready.
-4. Enable **Connect to Predefined Network** on both the RAG and client service stacks. Put the Coolify-generated full API service hostname in the client stack's environment, for example `RAG_API_BASE_URL=http://rag-api-<resource-uuid>:8080`.
+4. Enable **Connect to Predefined Network** on both the RAG and client service stacks. On that shared network the API answers to its service name, so set `RAG_API_BASE_URL=http://rag-api:8080` in the client stack's environment.
 
 ## Shared network, prefixed names, and no custom networks
 
@@ -69,10 +71,10 @@ Do not bypass the migration with direct SQL. A later release must provide a deli
 ## Private cross-stack procedure
 
 1. Keep all RAG services without domains and without host-published ports. `compose.coolify.yaml` already enforces this.
-2. Deploy the RAG stack. Coolify gives the API service a generated full hostname such as `rag-api-<resource-uuid>`; copy the actual name from Coolify rather than guessing it.
+2. Deploy the RAG stack. On the shared network the API resolves by its service name, `rag-api`. Verify that a client container resolves it (`getent hosts rag-api`) instead of assuming the Coolify-generated container name resolves across stacks; field verification showed the long generated name resolving only inside the stack's own Compose project.
 3. In the RAG service stack settings, enable **Connect to Predefined Network**.
 4. In each approved client stack, enable the same option.
-5. Set that client's API base URL to `http://<actual-full-api-service-name>:8080`, redeploy it, and authenticate with issued client credentials.
+5. Set that client's API base URL to `http://rag-api:8080`, redeploy it, and authenticate with issued client credentials.
 
 Client stacks must never resolve the data services by a bare or prefixed name. Because the whole stack shares Coolify's predefined network, `rag-postgres` and `rag-llama-cpp` are technically resolvable from any stack joined to it; keeping them off the client integration surface is a policy enforced by review, credentials, and client configuration — not by a network boundary. Coolify's documented mitigation for shared-network name collisions is that "Names can be prefixed to prevent collisions"; it does not firewall them.
 

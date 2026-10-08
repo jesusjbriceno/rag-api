@@ -87,6 +87,8 @@ To roll back, set both suffixes to the previous verified release tag and redeplo
 
 ## Deployment checklist
 
+The [environment contract](docs/deployment/environment-contract.md) states what any deployment must provide and what this repository owns, independently of platform. Everything below is how the current Coolify adapter supplies it.
+
 ### Secret inventory
 
 Set these values only in Coolify's deployment environment. The repository never contains actual PEMs or production passwords.
@@ -104,10 +106,10 @@ Rotate keys by first deploying the new public validation key alongside the old o
 
 1. Deploy the RAG Service Stack with no domains and no port mappings.
 2. Enable **Connect to Predefined Network** on both the RAG stack and the approved client stack.
-3. Copy Coolify's generated full API service name, such as `rag-api-<resource-uuid>`.
-4. Configure the client with `RAG_API_BASE_URL=http://<actual-full-api-service-name>:8080` and redeploy it.
+3. On that shared network the API resolves by its service name: verify `rag-api` from a client container rather than assuming the Coolify-generated container name resolves across stacks.
+4. Configure the client with `RAG_API_BASE_URL=http://rag-api:8080` and redeploy it.
 
-This is the only cross-stack path. Every container of the stack joins Coolify's shared predefined network, so the data services are technically resolvable from any stack joined to it; keeping them off the client surface is a policy, not a network boundary. Never resolve `rag-postgres` or `rag-llama-cpp` from a client stack, and never target the API by a bare service name.
+This is the only cross-stack path. Every container of the stack joins Coolify's shared predefined network, so the data services are technically resolvable from any stack joined to it; keeping them off the client surface is a policy, not a network boundary. Never resolve `rag-postgres` or `rag-llama-cpp` from a client stack.
 
 ### Health and recovery
 
@@ -123,4 +125,4 @@ An external scheduler can run `scripts/backup-rag.sh`, but the scheduler owns re
 - The runtime is CPU-only and uses a locally mounted, verified GGUF. GPU/NVIDIA runtime configuration is not part of this stack.
 - General-infrastructure model runtimes and automation remain outside this RAG delivery boundary.
 
-Read the [Coolify delivery guide](docs/deployment/coolify.md) before the first deployment or recovery.
+Read the [environment contract](docs/deployment/environment-contract.md) for what a deployment must provide, and the [Coolify delivery guide](docs/deployment/coolify.md) before the first deployment or recovery.
