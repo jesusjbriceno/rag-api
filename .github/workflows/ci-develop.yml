@@ -525,48 +525,20 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
+      - name: Checkout
+        uses: actions/checkout@eef61447b9ff4aafe5dcd4e0bbf5d482be7e7871 # v4.2.1
+        with:
+          persist-credentials: false
+
       - name: Prune stale develop and staging versions
         run: |
           set -Eeuo pipefail
 
-          owner="jesusjbriceno"
-          now="$(date -u +%s)"
-          retain_develop=20
-          develop_min_age_seconds=2592000
-          staging_min_age_seconds=86400
-
-          prune_develop() {
-            local package="$1"
-            gh api --paginate "/users/${owner}/packages/container/${package}/versions" \
-              | jq -r --argjson now "${now}" --argjson retain "${retain_develop}" --argjson min_age "${develop_min_age_seconds}" '
-                  [ .[]? | select((.metadata.container.tags // []) | any(startswith("develop-"))) ]
-                  | sort_by(.created_at) | reverse
-                  | .[($retain):]
-                  | .[]
-                  | select((($now - (.created_at | fromdateiso8601)) > $min_age))
-                  | .id
-                ' \
-              | while read -r version_id; do
-                  gh api -X DELETE "/users/${owner}/packages/container/${package}/versions/${version_id}" >/dev/null
-                  echo "Deleted stale develop version ${version_id} of ${package}"
-                done
-          }
-
-          prune_staging() {
-            local package="$1"
-            gh api --paginate "/users/${owner}/packages/container/${package}/versions" \
-              | jq -r --argjson now "${now}" --argjson min_age "${staging_min_age_seconds}" '
-                  .[]? | select((.metadata.container.tags // []) | any(startswith("staging-")))
-                  | select((($now - (.created_at | fromdateiso8601)) > $min_age))
-                  | .id
-                ' \
-              | while read -r version_id; do
-                  gh api -X DELETE "/users/${owner}/packages/container/${package}/versions/${version_id}" >/dev/null
-                  echo "Deleted stale staging version ${version_id} of ${package}"
-                done
-          }
-
-          prune_develop "rag-api"
-          prune_develop "rag-operator"
-          prune_staging "rag-api"
-          prune_staging "rag-operator"
+          # Develop class: keep the newest 20, delete only versions older
+          # than 30 days. Staging class: delete only staging-only versions
+          # older than 1 day. Both selection rules, including the absolute
+          # never-delete-release-tags rule, live in the shared script.
+          bash scripts/ci-prune-staging-versions.sh prune-develop jesusjbriceno rag-api
+          bash scripts/ci-prune-staging-versions.sh prune-develop jesusjbriceno rag-operator
+          bash scripts/ci-prune-staging-versions.sh prune jesusjbriceno rag-api 86400
+          bash scripts/ci-prune-staging-versions.sh prune jesusjbriceno rag-operator 86400
