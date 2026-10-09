@@ -12,6 +12,8 @@ public sealed class IncompatibleEmbeddingProfilesException : Exception
 
 public sealed record CollectionRepresentation(Guid Id, string Name, DateTimeOffset CreatedAt);
 
+public sealed record CollectionPage(IReadOnlyList<CollectionRepresentation> Items, string? NextCursor);
+
 public sealed record OperationStatusRepresentation(
     Guid Id,
     OperationStatus Status,
@@ -28,6 +30,8 @@ public interface IEmbeddingProfileDefaults
 public interface ICollectionCommandRepository
 {
     Task<bool> NameExistsAsync(Guid serviceClientId, string normalizedName, CancellationToken cancellationToken);
+
+    Task<AdminPage<Collection>> ListCollectionsAsync(Guid serviceClientId, int limit, AdminCursorKey? cursor, CancellationToken cancellationToken);
 
     void Add(Collection collection);
 
@@ -60,6 +64,30 @@ public sealed class CreateCollectionHandler(
         repository.Add(collection);
         await repository.SaveChangesAsync(cancellationToken);
         return new CollectionRepresentation(collection.Id, collection.Name, collection.CreatedAt);
+    }
+}
+
+// Mirrors the administration plane's listing handlers: the same limit and cursor validation, the same
+// { items, nextCursor } page shape, and the same AdminCursor codec, so the wire format is identical
+// across planes. The page ordering is (CreatedAt, Id) ascending — the cursor of a page is the last
+// item's (CreatedAt, Id) and the next page resumes strictly after that key.
+public sealed class ListCollectionsHandler(ICollectionCommandRepository repository)
+{
+    public async Task<CollectionPage> HandleAsync(
+        Guid serviceClientId,
+        int? limit,
+        string? cursor,
+        CancellationToken cancellationToken = default)
+    {
+        var pageSize = AdminSupport.ResolveLimit(limit);
+        var key = AdminSupport.ResolveCursor(cursor);
+        var page = await repository.ListCollectionsAsync(serviceClientId, pageSize, key, cancellationToken);
+        var nextCursor = page.HasMore
+            ? AdminCursor.Encode(new AdminCursorKey(page.Items[^1].CreatedAt, page.Items[^1].Id))
+            : null;
+        return new CollectionPage(
+            page.Items.Select(item => new CollectionRepresentation(item.Id, item.Name, item.CreatedAt)).ToList(),
+            nextCursor);
     }
 }
 

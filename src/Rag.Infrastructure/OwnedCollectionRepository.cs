@@ -64,5 +64,44 @@ public sealed class OwnedCollectionRepository(IngestionDbContext dbContext) : IC
                 SafeFailureStage(operation.FailureStage));
     }
 
+    // Keyset page over one client's collections. The ordering and cursor semantics are the administration
+    // plane's (see AdminRepository.ListClientsAsync): (CreatedAt, Id) ascending, with the decoded cursor
+    // resuming strictly after its key, so consecutive pages produced by AdminCursor.Encode have no
+    // duplicates and no gaps.
+    public async Task<AdminPage<Collection>> ListCollectionsAsync(
+        Guid serviceClientId,
+        int limit,
+        AdminCursorKey? cursor,
+        CancellationToken cancellationToken)
+    {
+        IQueryable<Collection> query = dbContext.Collections
+            .AsNoTracking()
+            .Where(collection => collection.ServiceClientId == serviceClientId);
+        if (cursor is { } key)
+        {
+            query = query.Where(collection =>
+                collection.CreatedAt > key.Timestamp ||
+                (collection.CreatedAt == key.Timestamp && collection.Id.CompareTo(key.Id) > 0));
+        }
+
+        var items = await query
+            .OrderBy(collection => collection.CreatedAt)
+            .ThenBy(collection => collection.Id)
+            .Take(limit + 1)
+            .ToListAsync(cancellationToken);
+        return TrimPage(items, limit);
+    }
+
+    private static AdminPage<Collection> TrimPage(List<Collection> items, int limit)
+    {
+        var hasMore = items.Count > limit;
+        if (hasMore)
+        {
+            items.RemoveAt(items.Count - 1);
+        }
+
+        return new AdminPage<Collection>(items, hasMore);
+    }
+
     private static string? SafeFailureStage(string? stage) => stage is "load" or "parse" or "embed" or "index" ? stage : null;
 }
