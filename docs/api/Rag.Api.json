@@ -186,6 +186,91 @@
             "bearerAuth": [ ]
           }
         ]
+      },
+      "get": {
+        "tags": [
+          "Public"
+        ],
+        "description": "Requires a bearer JWT. Public routes reject tokens that carry a scope claim.",
+        "operationId": "list_collections",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "pattern": "^-?(?:0|[1-9]\\d*)$",
+              "type": [
+                "integer",
+                "string"
+              ],
+              "format": "int32"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CollectionPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request. The limit is outside 1..100 or the cursor is invalid; the handler answers application/problem+json titled \"Invalid input\".",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error. The global exception handler answers application/problem+json titled \"Internal server error\".",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized. The request is missing a valid bearer JWT; the middleware answers application/problem+json titled \"Unauthorized\".",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden. The caller is authenticated but lacks the required policy or scope; the middleware answers application/problem+json titled \"Forbidden\".",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": [ ]
+          }
+        ]
       }
     },
     "/api/v1/collections/{collectionId}/ingestions:txt": {
@@ -2148,6 +2233,27 @@
               "string"
             ],
             "format": "date-time"
+          }
+        }
+      },
+      "CollectionPage": {
+        "required": [
+          "items",
+          "nextCursor"
+        ],
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CollectionRepresentation"
+            }
+          },
+          "nextCursor": {
+            "type": [
+              "null",
+              "string"
+            ]
           }
         }
       },

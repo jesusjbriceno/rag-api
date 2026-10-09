@@ -21,6 +21,9 @@ builder.Services.AddOpenApi(OpenApiDocumentContract.Configure);
 var openApiGeneration = builder.Environment.IsEnvironment(ApiEndpointSupport.OpenApiGenerationEnvironment);
 
 builder.Services.AddApplication();
+// The collection listing handler is registered here rather than inside AddApplication because only this
+// file is in scope for the listing slice; move it into AddApplication with the next Application change.
+builder.Services.AddScoped<ListCollectionsHandler>();
 builder.Services.AddInfrastructure(builder.Configuration, openApiGeneration);
 builder.Services.AddHistoricalIngestion();
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
@@ -214,6 +217,29 @@ app.MapPost("/api/v1/collections", async (HttpContext context, CreateCollectionH
         StatusCodes.Status415UnsupportedMediaType,
         "Unsupported content type. The handler only accepts application/json and answers application/problem+json " +
         "titled \"Unsupported content type\".");
+
+app.MapGet("/api/v1/collections", async (
+        HttpContext context,
+        ListCollectionsHandler handler,
+        int? limit,
+        string? cursor,
+        CancellationToken cancellationToken) =>
+    {
+        try
+        {
+            return Results.Ok(await handler.HandleAsync(ApiEndpointSupport.GetClientId(context.User), limit, cursor, cancellationToken));
+        }
+        catch (ArgumentException)
+        {
+            return ApiEndpointSupport.InvalidInput();
+        }
+    })
+    .WithName("list_collections")
+    .Produces<CollectionPage>(StatusCodes.Status200OK)
+    .DeclaresProblem(
+        StatusCodes.Status400BadRequest,
+        "Bad request. The limit is outside 1..100 or the cursor is invalid; the handler answers " +
+        "application/problem+json titled \"Invalid input\".");
 
 app.MapPost("/api/v1/collections/{collectionId:guid}/ingestions:txt", async (
     Guid collectionId,
