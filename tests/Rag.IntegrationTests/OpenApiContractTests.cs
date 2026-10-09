@@ -214,7 +214,7 @@ public sealed class OpenApiContractTests(OpenApiGenerationFactory generation) : 
             checkedOperations++;
         }
 
-        Assert.Equal(20, checkedOperations);
+        Assert.Equal(21, checkedOperations);
     }
 
     [Fact]
@@ -234,14 +234,14 @@ public sealed class OpenApiContractTests(OpenApiGenerationFactory generation) : 
     }
 
     [Fact]
-    public void The_document_publishes_twenty_operations_over_eighteen_paths_with_unique_operation_ids()
+    public void The_document_publishes_twenty_one_operations_over_eighteen_paths_with_unique_operation_ids()
     {
         var paths = Document["paths"]?.AsObject();
         Assert.NotNull(paths);
         Assert.Equal(18, paths!.Count);
 
         var operations = Operations(Document).ToArray();
-        Assert.Equal(20, operations.Length);
+        Assert.Equal(21, operations.Length);
 
         var operationIds = operations.Select(entry => entry.Operation["operationId"]?.GetValue<string>()).ToArray();
         Assert.All(operationIds, operationId => Assert.False(string.IsNullOrWhiteSpace(operationId), "Every operation needs an operationId."));
@@ -275,6 +275,7 @@ public sealed class OpenApiContractTests(OpenApiGenerationFactory generation) : 
     [InlineData("/api/v1/health", "get", "200", "HealthResponse")]
     [InlineData("/api/v1/auth/token", "post", "200", "TokenResponse")]
     [InlineData("/api/v1/collections", "post", "201", "CollectionRepresentation")]
+    [InlineData("/api/v1/collections", "get", "200", "CollectionPage")]
     [InlineData("/api/v1/collections/{collectionId}/ingestions:txt", "post", "200,202", "TxtIngestionResponse")]
     [InlineData("/api/v1/collections/{collectionId}/operations/{operationId}", "get", "200", "OperationStatusResponse")]
     [InlineData("/api/v1/retrieval:search", "post", "200", "SemanticRetrievalMatch")]
@@ -317,6 +318,7 @@ public sealed class OpenApiContractTests(OpenApiGenerationFactory generation) : 
     [InlineData("get", "/api/v1/health", "200,500")]
     [InlineData("post", "/api/v1/auth/token", "200,400,401,415,429,500")]
     [InlineData("post", "/api/v1/collections", "201,400,401,403,415,500")]
+    [InlineData("get", "/api/v1/collections", "200,400,401,403,500")]
     [InlineData("post", "/api/v1/collections/{collectionId}/ingestions:txt", "200,202,400,401,403,404,413,415,500")]
     [InlineData("get", "/api/v1/collections/{collectionId}/operations/{operationId}", "200,401,403,404,500")]
     [InlineData("post", "/api/v1/retrieval:search", "200,400,401,403,404,415,422,500")]
@@ -403,7 +405,7 @@ public sealed class OpenApiContractTests(OpenApiGenerationFactory generation) : 
     [Theory]
     [InlineData("/api/v1/health", "get")]
     [InlineData("/api/v1/auth/token", "post")]
-    [InlineData("/api/v1/collections", "post")]
+    [InlineData("/api/v1/collections", "get,post")]
     [InlineData("/api/v1/collections/{collectionId}/ingestions:txt", "post")]
     [InlineData("/api/v1/collections/{collectionId}/operations/{operationId}", "get")]
     [InlineData("/api/v1/retrieval:search", "post")]

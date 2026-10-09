@@ -237,6 +237,101 @@ public sealed class ProtectedApiTests(PostgreSqlFixture fixture) : IAsyncLifetim
         Assert.Contains(HistoricalScopes.UploadsWrite, body.GetProperty("scope").GetString(), StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task A_client_lists_only_its_own_collections()
+    {
+        var owner = await CreateAuthenticatedClientAsync("list-owner");
+        var foreign = await CreateAuthenticatedClientAsync("list-foreign");
+        var first = await CreateCollectionAsync(owner, "First");
+        var second = await CreateCollectionAsync(owner, "Second");
+        await CreateCollectionAsync(foreign, "Foreign");
+
+        var response = await SendAsync(owner.Token, HttpMethod.Get, "/api/v1/collections");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        var body = document.RootElement;
+        Assert.Equal(Keys("items", "nextCursor"), PropertyNames(body));
+        var items = body.GetProperty("items").EnumerateArray().ToArray();
+        Assert.Equal(2, items.Length);
+        Assert.Equal(Keys("id", "name", "createdAt"), PropertyNames(items[0]));
+        // Ordering is (CreatedAt, Id) ascending, so the newest collection is listed last.
+        Assert.Equal("First", items[0].GetProperty("name").GetString());
+        Assert.Equal("Second", items[^1].GetProperty("name").GetString());
+        Assert.Equal(2, items.Select(item => item.GetProperty("id").GetGuid()).Distinct().Count());
+        Assert.Equal(JsonValueKind.Null, body.GetProperty("nextCursor").ValueKind);
+
+        var foreignList = await SendAsync(foreign.Token, HttpMethod.Get, "/api/v1/collections");
+        Assert.Equal(HttpStatusCode.OK, foreignList.StatusCode);
+        using var foreignDocument = JsonDocument.Parse(await foreignList.Content.ReadAsStringAsync());
+        var foreignItems = foreignDocument.RootElement.GetProperty("items").EnumerateArray().ToArray();
+        Assert.Single(foreignItems);
+        Assert.DoesNotContain(first.Id, foreignItems.Select(item => item.GetProperty("id").GetGuid()));
+        Assert.DoesNotContain(second.Id, foreignItems.Select(item => item.GetProperty("id").GetGuid()));
+    }
+
+    [Fact]
+    public async Task Pagination_walks_the_whole_collection_set_without_duplicates_or_gaps()
+    {
+        var owner = await CreateAuthenticatedClientAsync("pager");
+        var created = new List<CollectionResponse>();
+        for (var index = 1; index <= 7; index++)
+        {
+            created.Add(await CreateCollectionAsync(owner, $"page-{index:D2}"));
+        }
+
+        var walked = new List<CollectionResponse>();
+        string? cursor = null;
+        var pages = 0;
+        do
+        {
+            var path = cursor is null
+                ? "/api/v1/collections?limit=3"
+                : $"/api/v1/collections?limit=3&cursor={Uri.EscapeDataString(cursor)}";
+            var response = await SendAsync(owner.Token, HttpMethod.Get, path);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            var body = document.RootElement;
+            DateTimeOffset previousCreatedAt = DateTimeOffset.MinValue;
+            Guid previousId = Guid.Empty;
+            foreach (var item in body.GetProperty("items").EnumerateArray())
+            {
+                var currentCreatedAt = item.GetProperty("createdAt").GetDateTimeOffset();
+                var currentId = item.GetProperty("id").GetGuid();
+                Assert.True(
+                    currentCreatedAt > previousCreatedAt ||
+                    (currentCreatedAt == previousCreatedAt && currentId > previousId),
+                    "The page ordering must stay (CreatedAt, Id) ascending across every page.");
+                previousCreatedAt = currentCreatedAt;
+                previousId = currentId;
+                walked.Add(new CollectionResponse(currentId, item.GetProperty("name").GetString()!));
+            }
+
+            cursor = body.GetProperty("nextCursor").GetString();
+            pages++;
+        }
+        while (cursor is not null);
+
+        Assert.Equal(3, pages);
+        Assert.Equal(created.Select(collection => collection.Id), walked.Select(collection => collection.Id));
+    }
+
+    [Fact]
+    public async Task An_out_of_range_limit_or_an_invalid_cursor_answers_the_listing_problem()
+    {
+        var owner = await CreateAuthenticatedClientAsync("invalid");
+        await CreateCollectionAsync(owner, "Anything");
+
+        var oversizedLimit = await SendAsync(owner.Token, HttpMethod.Get, "/api/v1/collections?limit=101");
+        var zeroLimit = await SendAsync(owner.Token, HttpMethod.Get, "/api/v1/collections?limit=0");
+        var invalidCursor = await SendAsync(owner.Token, HttpMethod.Get, $"/api/v1/collections?cursor={Uri.EscapeDataString("***")}");
+
+        AssertProblem(oversizedLimit, HttpStatusCode.BadRequest);
+        AssertProblem(zeroLimit, HttpStatusCode.BadRequest);
+        AssertProblem(invalidCursor, HttpStatusCode.BadRequest);
+        Assert.Contains("Invalid input", await invalidCursor.Content.ReadAsStringAsync(), StringComparison.Ordinal);
+    }
+
     private async Task<HistoricalClient> CreateHistoricalClientAsync(ProtectedApiFactory factory)
     {
         using var scope = factory.Services.CreateScope();
