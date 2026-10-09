@@ -52,6 +52,7 @@ jobs:
           bash scripts/test-ci-publication-verifier.sh
           bash scripts/test-ci-multiarch-index.sh
           bash scripts/test-ci-prune-staging-versions.sh
+          python3 scripts/validate-workflow-checkout.py
 
       - name: Lint workflows with actionlint
         env:
