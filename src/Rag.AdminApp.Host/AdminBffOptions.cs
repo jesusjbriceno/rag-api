@@ -20,6 +20,12 @@ public sealed class AdminBffOptions
     /// </summary>
     public List<string> AllowedSubjects { get; set; } = [];
 
+    /// <summary>
+    /// Optional directory of the built admin SPA (containing index.html). When unset,
+    /// the host falls back to the repository's conventional apps/admin-ui/dist path.
+    /// </summary>
+    public string? SpaRoot { get; set; }
+
     public void Validate()
     {
         if (!Uri.TryCreate(UpstreamBaseUrl, UriKind.Absolute, out var upstream) ||
