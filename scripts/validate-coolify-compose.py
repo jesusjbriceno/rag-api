@@ -15,9 +15,11 @@ SCRIPT_MOUNT_TARGET = "/scripts"
 # Production application images: exact repositories and immutable references only.
 API_IMAGE_REPOSITORY = "ghcr.io/jesusjbriceno/rag-api"
 OPERATOR_IMAGE_REPOSITORY = "ghcr.io/jesusjbriceno/rag-operator"
+ADMINAPP_IMAGE_REPOSITORY = "ghcr.io/jesusjbriceno/rag-adminapp"
 APP_IMAGES = {
     "rag-api": API_IMAGE_REPOSITORY,
     "rag-migrate": OPERATOR_IMAGE_REPOSITORY,
+    "rag-adminapp": ADMINAPP_IMAGE_REPOSITORY,
 }
 # Immutable tags only: exact semver (vX.Y.Z[-prerelease]) or develop-<40-char-sha>. Never latest/floating.
 IMMUTABLE_TAG_PATTERN = re.compile(r"^(v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?|develop-[0-9a-f]{40})$")
@@ -52,7 +54,7 @@ services = compose.get("services", {})
 # such as "postgres" collides with Coolify's own coolify-db container and Docker DNS
 # round-robins between them (coollabsio/coolify#5160). Coolify's documented mitigation is
 # that "Names can be prefixed to prevent collisions".
-required_services = {"rag-postgres", "rag-model-download", "rag-llama-cpp", "rag-migrate", "rag-api"}
+required_services = {"rag-postgres", "rag-model-download", "rag-llama-cpp", "rag-migrate", "rag-api", "rag-adminapp"}
 if set(services) != required_services:
     raise SystemExit(f"Coolify Compose must contain exactly {sorted(required_services)!r}; found {sorted(services)!r}.")
 
@@ -147,13 +149,80 @@ for name, expected_repository in APP_IMAGES.items():
         )
 
 if len(set(app_reference_kinds.values())) != 1:
-    raise SystemExit("rag-api and rag-migrate must both use immutable tags or both use repository-specific digests.")
+    raise SystemExit(
+        "Application images (rag-api, rag-migrate, rag-adminapp) must all use immutable tags "
+        "or all use repository-specific digests."
+    )
 if app_reference_kinds["rag-api"] == "tag" and len(set(app_tags.values())) != 1:
-    raise SystemExit("rag-api and rag-migrate must use the same immutable version tag.")
+    raise SystemExit(
+        "Application images (rag-api, rag-migrate, rag-adminapp) must use the same immutable version tag."
+    )
 
 api_environment = services["rag-api"].get("environment", {})
 if api_environment.get("LlamaCpp__BaseUrl") != "http://rag-llama-cpp:8080/":
     raise SystemExit("rag-api must target the private rag-llama-cpp service.")
+
+# The admin plane is enabled ONLY through deployment configuration. The switch must be
+# declared explicitly (compose defaults it to false) and, when enabled, the machine-proof
+# and assertion trust material must be wired; the API itself fails closed at startup
+# (ValidateOnStart) when enabled without valid trust configuration.
+admin_plane_enabled = api_environment.get("AdminPlane__Enabled")
+if admin_plane_enabled is None:
+    raise SystemExit("rag-api must declare AdminPlane__Enabled (the admin plane is off unless deployment configuration enables it).")
+if admin_plane_enabled not in ("true", "false"):
+    raise SystemExit("AdminPlane__Enabled must be exactly 'true' or 'false'; found " + repr(admin_plane_enabled) + ".")
+if admin_plane_enabled == "true":
+    required_admin_plane_environment = (
+        "AdminAppAuth__Apps__0__AppId",
+        "AdminAppAuth__Apps__0__KeyId",
+        "AdminAppAuth__Apps__0__CurrentSecret",
+        "AdminAssertion__Issuer",
+        "AdminAssertion__Audience",
+        "AdminAssertion__ValidationKeys__0__KeyId",
+        "AdminAssertion__ValidationKeys__0__PublicKeyPem",
+    )
+    missing_admin_plane = [key for key in required_admin_plane_environment if not api_environment.get(key)]
+    if missing_admin_plane:
+        raise SystemExit(
+            f"rag-api has AdminPlane__Enabled=true but is missing required admin trust configuration: {missing_admin_plane!r}."
+        )
+
+# The admin BFF must target the private API service and serve the SPA bundled into the
+# image. Every operator-supplied trust value (origins, allowlist subjects, Cloudflare
+# Access material, signing credentials, assertion keys) must be structurally wired; the
+# host fails closed at startup when any of them is missing or empty.
+admin_environment = services["rag-adminapp"].get("environment", {})
+if admin_environment.get("AdminBff__UpstreamBaseUrl") != "http://rag-api:8080/":
+    raise SystemExit("rag-adminapp must target the private rag-api service (AdminBff__UpstreamBaseUrl=http://rag-api:8080/).")
+if admin_environment.get("AdminBff__SpaRoot") != "/app/wwwroot":
+    raise SystemExit("rag-adminapp must serve the image-bundled SPA (AdminBff__SpaRoot=/app/wwwroot).")
+required_admin_environment = (
+    "AdminBff__AllowedOrigin",
+    "AdminBff__AllowedSubjects__0",
+    "AdminBff__Signing__AppId",
+    "AdminBff__Signing__KeyId",
+    "AdminBff__Signing__MachineSecret",
+    "CloudflareAccess__Issuer",
+    "CloudflareAccess__Audience",
+    "CloudflareAccess__Keys__0__KeyId",
+    "CloudflareAccess__Keys__0__PublicKeyPem",
+    "AdminAssertion__Issuer",
+    "AdminAssertion__Audience",
+    "AdminAssertion__AppId",
+    "AdminAssertion__KeyId",
+    "AdminAssertion__PrivateKeyPem",
+)
+missing_admin_environment = [key for key in required_admin_environment if key not in admin_environment]
+if missing_admin_environment:
+    raise SystemExit(
+        f"rag-adminapp is missing required admin environment wiring: {missing_admin_environment!r}."
+    )
+admin_depends_on = services["rag-adminapp"].get("depends_on", {}).get("rag-api", {})
+if admin_depends_on.get("condition") != "service_healthy":
+    raise SystemExit("rag-adminapp must wait for a healthy rag-api (depends_on.rag-api.condition=service_healthy).")
+admin_healthcheck = services["rag-adminapp"].get("healthcheck", {}).get("test")
+if not admin_healthcheck or not any("http://127.0.0.1:8080/health" in part for part in admin_healthcheck):
+    raise SystemExit("rag-adminapp must define a local /health healthcheck (the only unauthenticated probe).")
 
 published_ports = [name for name, service in services.items() if service.get("ports")]
 if published_ports:

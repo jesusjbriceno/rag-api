@@ -14,6 +14,46 @@ DOWNLOADER_IMAGE = "curlimages/curl@sha256:94e9e444bcba979c2ea12e27ae39bee4cd10b
 SERVER_IMAGE = "ghcr.io/ggml-org/llama.cpp@sha256:c005e79321f8e5731ec49a7f736aaeaac9465926c1e8f4c199c1d8a8996f26ef"
 API_IMAGE = "ghcr.io/jesusjbriceno/rag-api"
 OPERATOR_IMAGE = "ghcr.io/jesusjbriceno/rag-operator"
+ADMINAPP_IMAGE = "ghcr.io/jesusjbriceno/rag-adminapp"
+
+# Exact required rag-adminapp environment wiring. Every value is operator-supplied at
+# deployment time (tests only prove structural wiring, never real domains or secrets).
+ADMINAPP_ENVIRONMENT = {
+    "AdminBff__UpstreamBaseUrl": "http://rag-api:8080/",
+    "AdminBff__SpaRoot": "/app/wwwroot",
+    "AdminBff__AllowedOrigin": "OPERATOR_SUPPLIED_ORIGIN",
+    "AdminBff__AllowedSubjects__0": "OPERATOR_SUPPLIED_SUBJECT",
+    "AdminBff__Signing__AppId": "OPERATOR_SUPPLIED_APP_ID",
+    "AdminBff__Signing__KeyId": "OPERATOR_SUPPLIED_KEY_ID",
+    "AdminBff__Signing__MachineSecret": "OPERATOR_SUPPLIED_MACHINE_SECRET",
+    "CloudflareAccess__Issuer": "OPERATOR_SUPPLIED_CLOUDFLARE_ISSUER",
+    "CloudflareAccess__Audience": "OPERATOR_SUPPLIED_CLOUDFLARE_AUDIENCE",
+    "CloudflareAccess__Keys__0__KeyId": "OPERATOR_SUPPLIED_CLOUDFLARE_KEY_ID",
+    "CloudflareAccess__Keys__0__PublicKeyPem": "OPERATOR_SUPPLIED_CLOUDFLARE_PUBLIC_KEY",
+    "AdminAssertion__Issuer": "OPERATOR_SUPPLIED_ASSERTION_ISSUER",
+    "AdminAssertion__Audience": "OPERATOR_SUPPLIED_ASSERTION_AUDIENCE",
+    "AdminAssertion__AppId": "OPERATOR_SUPPLIED_APP_ID",
+    "AdminAssertion__KeyId": "OPERATOR_SUPPLIED_KEY_ID",
+    "AdminAssertion__PrivateKeyPem": "OPERATOR_SUPPLIED_ASSERTION_PRIVATE_KEY",
+}
+
+# Exact required rag-api admin-plane trust wiring when AdminPlane__Enabled=true.
+API_ADMIN_PLANE_ENVIRONMENT = {
+    "AdminAppAuth__Apps__0__AppId": "OPERATOR_SUPPLIED_APP_ID",
+    "AdminAppAuth__Apps__0__KeyId": "OPERATOR_SUPPLIED_KEY_ID",
+    "AdminAppAuth__Apps__0__CurrentSecret": "OPERATOR_SUPPLIED_MACHINE_SECRET",
+    "AdminAssertion__Issuer": "OPERATOR_SUPPLIED_ASSERTION_ISSUER",
+    "AdminAssertion__Audience": "OPERATOR_SUPPLIED_ASSERTION_AUDIENCE",
+    "AdminAssertion__ValidationKeys__0__KeyId": "OPERATOR_SUPPLIED_KEY_ID",
+    "AdminAssertion__ValidationKeys__0__PublicKeyPem": "OPERATOR_SUPPLIED_ASSERTION_PUBLIC_KEY",
+}
+
+
+def adminapp_image_like(api_image):
+    """Derive the adminapp image reference with the same immutability kind as the API image."""
+    if "@sha256:" in api_image:
+        return f"{ADMINAPP_IMAGE}@sha256:{'c' * 64}"
+    return f"{ADMINAPP_IMAGE}:{api_image.rsplit(':', 1)[1]}"
 
 
 def compose(api_image, operator_image):
@@ -38,7 +78,14 @@ def compose(api_image, operator_image):
             "rag-api": {
                 "image": api_image,
                 "pull_policy": "always",
-                "environment": {"LlamaCpp__BaseUrl": "http://rag-llama-cpp:8080/"},
+                "environment": {"LlamaCpp__BaseUrl": "http://rag-llama-cpp:8080/", "AdminPlane__Enabled": "false"},
+            },
+            "rag-adminapp": {
+                "image": adminapp_image_like(api_image),
+                "pull_policy": "always",
+                "environment": dict(ADMINAPP_ENVIRONMENT),
+                "depends_on": {"rag-api": {"condition": "service_healthy"}},
+                "healthcheck": {"test": ["CMD-SHELL", "curl --fail --silent --show-error http://127.0.0.1:8080/health"]},
             },
         },
         "networks": {"default": {}},
@@ -112,7 +159,7 @@ class CoolifyComposeValidationTests(unittest.TestCase):
         self.assert_rejected(f"{API_IMAGE}:v1.2.3@sha256:{'a' * 64}", f"{OPERATOR_IMAGE}@sha256:{'b' * 64}", "not both")
 
     def test_rejects_mixed_tag_and_digest_references(self):
-        self.assert_rejected(f"{API_IMAGE}:v1.2.3", f"{OPERATOR_IMAGE}@sha256:{'b' * 64}", "both use immutable tags or both use repository-specific digests")
+        self.assert_rejected(f"{API_IMAGE}:v1.2.3", f"{OPERATOR_IMAGE}@sha256:{'b' * 64}", "must all use immutable tags or all use repository-specific digests")
 
     def test_rejects_wrong_llama_cpp_base_url(self):
         payload = compose(f"{API_IMAGE}:v1.2.3", f"{OPERATOR_IMAGE}:v1.2.3")
@@ -166,6 +213,81 @@ class CoolifyComposeValidationTests(unittest.TestCase):
             "downloader script is empty",
             scripts_directory=empty_script_directory,
         )
+
+    def validate_payload(self, payload):
+        payload["services"]["rag-model-download"]["volumes"][1]["source"] = str(self.scripts_directory)
+        return subprocess.run(
+            [sys.executable, str(VALIDATOR), str(self.downloader)],
+            input=json.dumps(payload),
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+    def assert_payload_rejected(self, payload, message):
+        result = self.validate_payload(payload)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(message, result.stderr)
+
+    def test_rejects_missing_rag_adminapp_service(self):
+        payload = compose(f"{API_IMAGE}:v1.2.3", f"{OPERATOR_IMAGE}:v1.2.3")
+        del payload["services"]["rag-adminapp"]
+        self.assert_payload_rejected(payload, "rag-adminapp")
+
+    def test_rejects_adminapp_repository_drift(self):
+        payload = compose(f"{API_IMAGE}:v1.2.3", f"{OPERATOR_IMAGE}:v1.2.3")
+        payload["services"]["rag-adminapp"]["image"] = "ghcr.io/example/rag-adminapp:v1.2.3"
+        self.assert_payload_rejected(payload, "repository drift")
+
+    def test_rejects_adminapp_mutable_tag(self):
+        payload = compose(f"{API_IMAGE}:v1.2.3", f"{OPERATOR_IMAGE}:v1.2.3")
+        payload["services"]["rag-adminapp"]["image"] = f"{ADMINAPP_IMAGE}:latest"
+        self.assert_payload_rejected(payload, "must not be empty or 'latest'")
+
+    def test_rejects_adminapp_mixed_reference_kind(self):
+        payload = compose(f"{API_IMAGE}:v1.2.3", f"{OPERATOR_IMAGE}:v1.2.3")
+        payload["services"]["rag-adminapp"]["image"] = f"{ADMINAPP_IMAGE}@sha256:{'c' * 64}"
+        self.assert_payload_rejected(payload, "must all use immutable tags or all use repository-specific digests")
+
+    def test_rejects_adminapp_local_build(self):
+        payload = compose(f"{API_IMAGE}:v1.2.3", f"{OPERATOR_IMAGE}:v1.2.3")
+        payload["services"]["rag-adminapp"]["build"] = "."
+        self.assert_payload_rejected(payload, "must not declare a local build")
+
+    def test_rejects_adminapp_published_ports(self):
+        payload = compose(f"{API_IMAGE}:v1.2.3", f"{OPERATOR_IMAGE}:v1.2.3")
+        payload["services"]["rag-adminapp"]["ports"] = ["8080:8080"]
+        self.assert_payload_rejected(payload, "must not publish ports")
+
+    def test_rejects_adminapp_wrong_upstream(self):
+        payload = compose(f"{API_IMAGE}:v1.2.3", f"{OPERATOR_IMAGE}:v1.2.3")
+        payload["services"]["rag-adminapp"]["environment"]["AdminBff__UpstreamBaseUrl"] = "http://localhost:8080/"
+        self.assert_payload_rejected(payload, "must target the private rag-api service")
+
+    def test_rejects_adminapp_missing_required_environment(self):
+        payload = compose(f"{API_IMAGE}:v1.2.3", f"{OPERATOR_IMAGE}:v1.2.3")
+        del payload["services"]["rag-adminapp"]["environment"]["AdminBff__AllowedSubjects__0"]
+        self.assert_payload_rejected(payload, "missing required admin environment wiring")
+
+    def test_rejects_adminapp_without_rag_api_health_dependency(self):
+        payload = compose(f"{API_IMAGE}:v1.2.3", f"{OPERATOR_IMAGE}:v1.2.3")
+        payload["services"]["rag-adminapp"]["depends_on"] = {"rag-api": {"condition": "service_started"}}
+        self.assert_payload_rejected(payload, "must wait for a healthy rag-api")
+
+    def test_rejects_missing_adminplane_enabled_switch(self):
+        payload = compose(f"{API_IMAGE}:v1.2.3", f"{OPERATOR_IMAGE}:v1.2.3")
+        del payload["services"]["rag-api"]["environment"]["AdminPlane__Enabled"]
+        self.assert_payload_rejected(payload, "AdminPlane__Enabled")
+
+    def test_rejects_invalid_adminplane_enabled_value(self):
+        payload = compose(f"{API_IMAGE}:v1.2.3", f"{OPERATOR_IMAGE}:v1.2.3")
+        payload["services"]["rag-api"]["environment"]["AdminPlane__Enabled"] = "yes"
+        self.assert_payload_rejected(payload, "AdminPlane__Enabled must be exactly 'true' or 'false'")
+
+    def test_rejects_enabled_adminplane_without_trust_material(self):
+        payload = compose(f"{API_IMAGE}:v1.2.3", f"{OPERATOR_IMAGE}:v1.2.3")
+        payload["services"]["rag-api"]["environment"]["AdminPlane__Enabled"] = "true"
+        self.assert_payload_rejected(payload, "missing required admin trust configuration")
 
     def test_rejects_custom_networks(self):
         payload = compose(f"{API_IMAGE}:v1.2.3", f"{OPERATOR_IMAGE}:v1.2.3")

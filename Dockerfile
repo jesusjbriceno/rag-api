@@ -27,6 +27,22 @@ RUN dotnet publish src/Rag.Api/Rag.Api.csproj \
 RUN dotnet publish src/Rag.Operator/Rag.Operator.csproj \
         --configuration Release --no-restore --output /out/operator /p:UseAppHost=false \
         -p:Version="${ASSEMBLY_VERSION}" -p:InformationalVersion="${PUBLICATION_VERSION}"
+RUN dotnet publish src/Rag.AdminApp.Host/Rag.AdminApp.Host.csproj \
+        --configuration Release --no-restore --output /out/adminapp /p:UseAppHost=false \
+        -p:Version="${ASSEMBLY_VERSION}" -p:InformationalVersion="${PUBLICATION_VERSION}"
+
+# Admin SPA build stage. Node 22 LTS satisfies Vitest 5's engine range
+# (^22.12.0 || ^24.0.0 || >=26.0.0); Node 23/25 are non-LTS and must not be used here
+# or in CI. Only package manifests are copied first so `npm ci` layers cache; only
+# source files are copied afterwards, so the repository's local node_modules never
+# enters the image build.
+FROM node:22-bookworm-slim AS admin-ui
+WORKDIR /ui
+COPY apps/admin-ui/package.json apps/admin-ui/package-lock.json ./
+RUN npm ci
+COPY apps/admin-ui/index.html apps/admin-ui/tsconfig.json apps/admin-ui/vite.config.ts ./
+COPY apps/admin-ui/src ./src
+RUN npm run build
 
 FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
 ARG PUBLICATION_VERSION
@@ -52,3 +68,14 @@ FROM runtime AS operator
 COPY --from=build --chown=rag:rag /out/operator/ ./
 USER rag
 ENTRYPOINT ["dotnet", "Rag.Operator.dll"]
+
+# Admin BFF + SPA host: only the published host output and the built static SPA assets
+# enter the image (no Node, no source, no signing material). Non-root, private by
+# default; Coolify exposes it only through its proxy/Cloudflare Access boundary.
+FROM runtime AS admin
+COPY --from=build --chown=rag:rag /out/adminapp/ ./
+COPY --from=admin-ui --chown=rag:rag /ui/dist/ ./wwwroot
+USER rag
+ENV ASPNETCORE_URLS=http://+:8080 \
+    DOTNET_EnableDiagnostics=0
+ENTRYPOINT ["dotnet", "Rag.AdminApp.Host.dll"]
