@@ -60,14 +60,17 @@ write_proof() {
 }
 
 write_proof api ghcr.io/example/rag-api >"${proof_dir}/api.json"
+write_proof adminapp ghcr.io/example/rag-adminapp >"${proof_dir}/adminapp.json"
 write_proof operator ghcr.io/example/rag-operator >"${proof_dir}/operator.json"
 payload_one="$(build_completion_payload "${proof_dir}")"
 payload_two="$(build_completion_payload "${proof_dir}")"
 assert_equals "${payload_one}" "${payload_two}" 'marker payload idempotency'
 jq -e '
-  .source_revision == "0123456789abcdef0123456789abcdef01234567"
+  .schema_version == 2
+  and .source_revision == "0123456789abcdef0123456789abcdef01234567"
   and .workflow.run_id == "123"
-  and ([.images[].platforms[]] | length == 4)
+  and ([.images[].component] | sort) == ["adminapp", "api", "operator"]
+  and ([.images[].platforms[]] | length == 6)
   and all(.images[]; .index.attachments == {signature:"attached", slsa:"attached"})
 ' <<<"${payload_one}" >/dev/null || fail 'marker payload content is incomplete'
 
@@ -99,6 +102,21 @@ if (build_completion_payload "${proof_dir}" >/dev/null 2>&1); then
 fi
 
 write_proof operator ghcr.io/example/rag-operator >"${proof_dir}/operator.json"
+
+jq '.platforms[1].tag_digest = "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"' \
+  "${proof_dir}/adminapp.json" >"${proof_dir}/adminapp-invalid.json"
+mv "${proof_dir}/adminapp-invalid.json" "${proof_dir}/adminapp.json"
+if (build_completion_payload "${proof_dir}" >/dev/null 2>&1); then
+  fail 'marker payload accepted an adminapp platform tag digest different from its image digest'
+fi
+
+write_proof adminapp ghcr.io/example/rag-adminapp >"${proof_dir}/adminapp.json"
+
+rm "${proof_dir}/adminapp.json"
+if (build_completion_payload "${proof_dir}" >/dev/null 2>&1); then
+  fail 'marker payload was created with the adminapp publication proof missing'
+fi
+write_proof adminapp ghcr.io/example/rag-adminapp >"${proof_dir}/adminapp.json"
 
 rm "${proof_dir}/operator.json"
 if (build_completion_payload "${proof_dir}" >/dev/null 2>&1); then
