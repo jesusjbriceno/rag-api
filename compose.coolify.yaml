@@ -74,7 +74,20 @@ services:
   rag-api:
     image: ghcr.io/jesusjbriceno/rag-api${RAG_API_IMAGE_REFERENCE}
     pull_policy: always
-    environment: *rag-environment
+    # The admin plane is off unless deployment configuration explicitly enables it
+    # (ADMINPLANE__ENABLED=true). When enabled, the API validates the admin machine-proof
+    # and assertion trust material at startup and refuses to start if it is missing.
+    environment:
+      <<: *rag-environment
+      AdminPlane__Enabled: ${ADMINPLANE__ENABLED:-false}
+      AdminAppAuth__Apps__0__AppId: ${ADMINAPPAUTH__APPS__0__APP_ID:-}
+      AdminAppAuth__Apps__0__KeyId: ${ADMINAPPAUTH__APPS__0__KEY_ID:-}
+      AdminAppAuth__Apps__0__CurrentSecret: ${ADMINAPPAUTH__APPS__0__CURRENT_SECRET:-}
+      AdminAppAuth__Apps__0__PreviousSecret: ${ADMINAPPAUTH__APPS__0__PREVIOUS_SECRET:-}
+      AdminAssertion__Issuer: ${ADMINASSERTION__ISSUER:-}
+      AdminAssertion__Audience: ${ADMINASSERTION__AUDIENCE:-}
+      AdminAssertion__ValidationKeys__0__KeyId: ${ADMINASSERTION__VALIDATION_KEYS__0__KEY_ID:-}
+      AdminAssertion__ValidationKeys__0__PublicKeyPem: ${ADMINASSERTION__VALIDATION_KEYS__0__PUBLIC_KEY_PEM:-}
     volumes:
       - rag-content:/app/content
     depends_on:
@@ -84,6 +97,44 @@ services:
         condition: service_started
     healthcheck:
       test: ["CMD-SHELL", "curl --fail --silent --show-error http://127.0.0.1:8080/api/v1/health/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
+    restart: unless-stopped
+
+  # Admin BFF + SPA host. Private service only: no ports are published; exposure is via
+  # the Coolify proxy/domain and the Cloudflare Access boundary in front of it. Every
+  # operator-supplied trust value (allowed origin, allowlisted Cloudflare subjects,
+  # Cloudflare Access keys, upstream signing credentials, assertion signing key) fails
+  # closed at startup when missing or empty — the host never serves the admin surface
+  # unconfigured. The image reference follows the API release train by default
+  # (RAG_ADMINAPP_IMAGE_REFERENCE may override it once the admin image is published).
+  rag-adminapp:
+    image: ghcr.io/jesusjbriceno/rag-adminapp${RAG_ADMINAPP_IMAGE_REFERENCE:-${RAG_API_IMAGE_REFERENCE}}
+    pull_policy: always
+    environment:
+      AdminBff__UpstreamBaseUrl: http://rag-api:8080/
+      AdminBff__SpaRoot: /app/wwwroot
+      AdminBff__AllowedOrigin: ${ADMINBFF__ALLOWED_ORIGIN:-}
+      AdminBff__AllowedSubjects__0: ${ADMINBFF__ALLOWED_SUBJECTS__0:-}
+      AdminBff__Signing__AppId: ${ADMINBFF__SIGNING__APP_ID:-}
+      AdminBff__Signing__KeyId: ${ADMINBFF__SIGNING__KEY_ID:-}
+      AdminBff__Signing__MachineSecret: ${ADMINBFF__SIGNING__MACHINE_SECRET:-}
+      CloudflareAccess__Issuer: ${CLOUDFLAREACCESS__ISSUER:-}
+      CloudflareAccess__Audience: ${CLOUDFLAREACCESS__AUDIENCE:-}
+      CloudflareAccess__Keys__0__KeyId: ${CLOUDFLAREACCESS__KEYS__0__KEY_ID:-}
+      CloudflareAccess__Keys__0__PublicKeyPem: ${CLOUDFLAREACCESS__KEYS__0__PUBLIC_KEY_PEM:-}
+      AdminAssertion__Issuer: ${ADMINASSERTION__ISSUER:-}
+      AdminAssertion__Audience: ${ADMINASSERTION__AUDIENCE:-}
+      AdminAssertion__AppId: ${ADMINBFF__SIGNING__APP_ID:-}
+      AdminAssertion__KeyId: ${ADMINBFF__SIGNING__KEY_ID:-}
+      AdminAssertion__PrivateKeyPem: ${ADMINASSERTION__PRIVATE_KEY_PEM:-}
+    depends_on:
+      rag-api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl --fail --silent --show-error http://127.0.0.1:8080/health"]
       interval: 10s
       timeout: 5s
       retries: 12

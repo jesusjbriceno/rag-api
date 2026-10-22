@@ -20,8 +20,8 @@ read_payload() {
     and (.signature | type == "object"
       and (.identity | type == "string" and startswith("https://github.com/"))
       and .issuer == "https://token.actions.githubusercontent.com")
-    and (.images | type == "array" and length == 2
-      and ([.[].component] | sort) == ["api", "operator"]
+    and (.images | type == "array" and length == 3
+      and ([.[].component] | sort) == ["adminapp", "api", "operator"]
       and all(.[];
         (.index | type == "object"
           and (.digest_ref | type == "string" and test("@sha256:[0-9a-f]{64}$"))
@@ -43,25 +43,27 @@ read_payload() {
 build_completion_payload() {
   local proof_directory="$1"
   local api_proof="${proof_directory}/api.json"
+  local adminapp_proof="${proof_directory}/adminapp.json"
   local operator_proof="${proof_directory}/operator.json"
   local payload
 
-  [[ -f "${api_proof}" && -f "${operator_proof}" ]] || fail 'both API and operator publication proofs are required'
-  payload="$(jq -ncS --slurpfile api "${api_proof}" --slurpfile operator "${operator_proof}" '
+  [[ -f "${api_proof}" && -f "${adminapp_proof}" && -f "${operator_proof}" ]] \
+    || fail 'API, adminapp, and operator publication proofs are all required'
+  payload="$(jq -ncS --slurpfile api "${api_proof}" --slurpfile adminapp "${adminapp_proof}" --slurpfile operator "${operator_proof}" '
     ($api[0]) as $api_proof
+    | ($adminapp[0]) as $adminapp_proof
     | ($operator[0]) as $operator_proof
-    | if ($api_proof.component != "api" or $operator_proof.component != "operator") then error("component proof mismatch") else . end
-    | if ($api_proof.source_revision != $operator_proof.source_revision
-          or $api_proof.workflow != $operator_proof.workflow
-          or $api_proof.publication_tag != $operator_proof.publication_tag
-          or $api_proof.signature != $operator_proof.signature) then error("proof metadata mismatch") else . end
+    | if ($api_proof.component != "api" or $adminapp_proof.component != "adminapp" or $operator_proof.component != "operator") then error("component proof mismatch") else . end
+    | if ([($api_proof, $adminapp_proof, $operator_proof)]
+          | map({source_revision, workflow, publication_tag, signature})
+          | unique | length) != 1 then error("proof metadata mismatch") else . end
     | {
         schema_version: 2,
         source_revision: $api_proof.source_revision,
         workflow: $api_proof.workflow,
         publication_tag: $api_proof.publication_tag,
         signature: $api_proof.signature,
-        images: [$api_proof, $operator_proof]
+        images: [$api_proof, $adminapp_proof, $operator_proof]
           | map({component, index, platforms})
           | sort_by(.component)
       }
@@ -97,14 +99,14 @@ record_completion_marker() {
     statuses="$(gh api --paginate "/repos/${repository}/deployments/${existing_id}/statuses?per_page=100" | jq -sc 'add')"
     jq -e 'any(.[]; .state == "success")' <<<"${statuses}" >/dev/null || fail "existing completion marker ${existing_id} is not successful"
     marker_id="${existing_id}"
-    printf 'Publication completion marker %s already records this source, both multi-platform indexes, and all platform digests.\n' "${marker_id}"
+    printf 'Publication completion marker %s already records this source, all three multi-platform indexes, and all platform digests.\n' "${marker_id}"
   else
     request="$(jq -n --arg sha "${GITHUB_SHA}" --argjson payload "${expected_payload}" '
       {
         ref: $sha,
         task: "publication-completion",
         environment: "publication-completion",
-        description: "Durable dual-image multi-architecture publication completion marker",
+        description: "Durable three-image multi-architecture publication completion marker",
         auto_merge: false,
         required_contexts: [],
         transient_environment: false,
@@ -118,7 +120,7 @@ record_completion_marker() {
     gh api -X POST "/repos/${repository}/deployments/${marker_id}/statuses" \
       -f state=success \
       -f environment=publication-completion \
-       -f description='Both immutable multi-platform tags resolved to their intended indexes.' \
+       -f description='All three immutable multi-platform tags resolved to their intended indexes.' \
       -F auto_inactive=false >/dev/null
     printf 'Created publication completion marker %s.\n' "${marker_id}"
   fi

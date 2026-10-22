@@ -136,6 +136,28 @@ public sealed class AdminMachineProofVerifierTests
     }
 
     [Fact]
+    public void An_empty_optional_previous_secret_is_normalized_to_unset_by_validation()
+    {
+        var options = CreateOptions(CurrentSecret, "");
+
+        options.Validate();
+
+        Assert.Null(options.Apps[0].PreviousSecret);
+    }
+
+    [Fact]
+    public void A_signature_made_with_an_empty_secret_is_rejected_after_validation_normalizes_the_previous_secret()
+    {
+        var options = CreateOptions(CurrentSecret, "");
+        options.Validate();
+        var verifier = new AdminMachineProofVerifier(options);
+        var now = DateTimeOffset.UtcNow;
+        var proof = CreateProof(now);
+
+        Assert.False(verifier.Verify(proof, Sign(proof, ""), now));
+    }
+
+    [Fact]
     public void App_auth_options_reject_invalid_configuration()
     {
         Assert.Throws<InvalidOperationException>(() => new AdminAppAuthOptions().Validate());

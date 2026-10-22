@@ -7,6 +7,7 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../../src/Rag.Api/Rag.Api.csproj" />
+    <ProjectReference Include="../../src/Rag.AdminApp.Host/Rag.AdminApp.Host.csproj" />
     <ProjectReference Include="../../src/Rag.Infrastructure/Rag.Infrastructure.csproj" />
     <ProjectReference Include="../../src/Rag.Domain/Rag.Domain.csproj" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" />

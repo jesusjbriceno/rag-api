@@ -17,6 +17,13 @@ public sealed class AdminAppAuthOptions
 
         foreach (var app in Apps)
         {
+            // An absent Compose optional reaches .NET as string.Empty; treat only that
+            // value as genuinely unset so it never becomes an accepted empty HMAC key.
+            if (string.IsNullOrEmpty(app.PreviousSecret))
+            {
+                app.PreviousSecret = null;
+            }
+
             if (string.IsNullOrWhiteSpace(app.AppId) ||
                 string.IsNullOrWhiteSpace(app.KeyId) ||
                 string.IsNullOrWhiteSpace(app.CurrentSecret))
