@@ -18,6 +18,13 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    # SonarQube is currently not deployed (the Community edition was retired from
+    # the Hostinger VPS for CPU/RAM reasons). The analysis is opt-in: set the
+    # repository variable SONAR_ENABLED=true once a server exists again (planned
+    # on OCI) together with the SONAR_TOKEN and SONAR_HOST_URL secrets. Without
+    # that variable the job only builds and tests.
+    env:
+      SONAR_ENABLED: ${{ vars.SONAR_ENABLED }}
     steps:
       - name: Checkout
         uses: actions/checkout@eef61447b9ff4aafe5dcd4e0bbf5d482be7e7871 # v4.2.1
@@ -31,9 +38,11 @@ jobs:
           global-json-file: global.json
 
       - name: Install SonarScanner for .NET
+        if: env.SONAR_ENABLED == 'true'
         run: dotnet tool install --global dotnet-sonarscanner --version 11.2.1
 
       - name: Begin SonarQube analysis
+        if: env.SONAR_ENABLED == 'true'
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
@@ -76,6 +85,7 @@ jobs:
             --results-directory "${RUNNER_TEMP}/coverage"
 
       - name: End SonarQube analysis
+        if: env.SONAR_ENABLED == 'true'
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
