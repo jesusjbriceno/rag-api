@@ -4,9 +4,9 @@ This runbook describes how to deploy the admin browser application
 (`rag-adminapp`: the Cloudflare-guarded BFF `Rag.AdminApp.Host` plus the admin
 SPA) as a private service next to the existing API stack. It is a
 **future-deployable** contract: nothing in this repository deploys, publishes,
-or configures a live environment, and **every policy, domain, subject, key, and
-secret below is operator-supplied**. No concrete domain, Cloudflare value, user,
-or secret appears in this repository.
+or configures a live environment. The test hostname selected for this stack is
+`admin-rag.kitin.es`; DNS, Access policies, subjects, keys, and secrets remain
+operator-supplied. No DNS record, Cloudflare policy, or secret is created here.
 
 The service is delivered by Compose (`compose.coolify.yaml`, service
 `rag-adminapp`) and validated by `scripts/validate-coolify-compose.py`. It has
@@ -26,8 +26,8 @@ Before the first admin deployment, the environment must already provide:
    `.github/workflows/ci-release.yml` / `ci-develop.yml`). If the tag exists for
    the API but not yet for the admin image, pull fails — publish or pin an
    existing admin tag first.
-3. A Cloudflare Access application in front of the admin hostname, with a policy
-   that the operator defines. The repository does not provision Cloudflare
+3. A Cloudflare Access application in front of `admin-rag.kitin.es`, with a
+   policy that the operator defines. The repository does not provision Cloudflare
    policy; the BFF only verifies the JWT and enforces the subject allowlist.
 4. The Cloudflare Access team domain (issuer), application AUD (audience), and
    the public key(s) Cloudflare publishes for JWT verification.
@@ -46,7 +46,7 @@ start — it never serves the admin surface unconfigured.
 
 | Compose variable | Feeds | Meaning | Required |
 | --- | --- | --- | --- |
-| `ADMINBFF__ALLOWED_ORIGIN` | `AdminBff:AllowedOrigin` | Exact browser origin (scheme + host) allowed to call mutation routes. Use the public admin hostname. | Yes |
+| `ADMINBFF__ALLOWED_ORIGIN` | `AdminBff:AllowedOrigin` | Exact browser origin (scheme + host) allowed to call mutation routes. For this test set `https://admin-rag.kitin.es`, matching the Coolify domain exactly. | Yes |
 | `ADMINBFF__ALLOWED_SUBJECTS__0` | `AdminBff:AllowedSubjects:0` | One exact Cloudflare Access subject. Add more via `ADMINBFF__ALLOWED_SUBJECTS__1`, `__2`, … An empty list means no administrator may operate the BFF. | Yes (at least one) |
 | `ADMINBFF__SIGNING__APP_ID` | `AdminBff:Signing:AppId` (and `AdminAssertion:AppId`) | The admin app id the API's `AdminAppAuth` expects. | Yes |
 | `ADMINBFF__SIGNING__KEY_ID` | `AdminBff:Signing:KeyId` (and `AdminAssertion:KeyId`) | Key id for the HMAC machine proof and the assertion. | Yes |
@@ -60,6 +60,26 @@ start — it never serves the admin surface unconfigured.
 Fixed (not operator-supplied) wiring inside the Compose service:
 `AdminBff__UpstreamBaseUrl=http://rag-api:8080/` (private network only) and
 `AdminBff__SpaRoot=/app/wwwroot` (the SPA bundled in the image).
+
+## Coolify hostname and DNS
+
+For the test deployment, use `https://admin-rag.kitin.es`:
+
+1. In the DNS zone for `kitin.es`, point `admin-rag.kitin.es` at the Coolify
+   server's public proxy target using the appropriate A/AAAA or CNAME record.
+   When using Cloudflare Access, proxy the record through Cloudflare. The server's
+   address is environment-specific and is not stored in this repository.
+2. In the Coolify resource's **Domains** settings, add an HTTPS domain for
+   `admin-rag.kitin.es`, select the `rag-adminapp` service, and set the internal
+   port to `8080`. Coolify routes through its proxy; do not add `ports:` to
+   Compose. See [Coolify Domains](https://coolify.io/docs/core/networking/domains).
+3. Set `ADMINBFF__ALLOWED_ORIGIN=https://admin-rag.kitin.es` exactly, then create
+   a Cloudflare Zero Trust Access application for the same hostname. Restrict its
+   policy to the intended administrators and configure the issuer, audience, and
+   verification keys listed above.
+4. Keep `rag-api` and the data services without public domains. Only the admin
+   browser surface receives this hostname, and it remains guarded by both
+   Cloudflare Access and the BFF's verified-subject allowlist.
 
 ### `rag-api` admin plane (off unless explicitly enabled)
 
