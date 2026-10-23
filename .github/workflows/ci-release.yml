@@ -36,9 +36,8 @@ jobs:
       - name: Build
         run: dotnet build Rag.sln --configuration Release --no-restore
 
-      - name: Test
-        run: dotnet test Rag.sln --configuration Release --no-build
-
+      # The admin UI must be built BEFORE the .NET test step: the AdminApp static-file
+      # integration tests read apps/admin-ui/dist and fail without it.
       # Admin UI: Node 22 LTS satisfies Vitest 5's engine range
       # (^22.12.0 || ^24.0.0 || >=26.0.0). Do not use Node 23/25.
       - name: Set up Node for admin UI
@@ -59,6 +58,9 @@ jobs:
 
       - name: Build admin UI
         run: npm --prefix apps/admin-ui run build
+
+      - name: Test
+        run: dotnet test Rag.sln --configuration Release --no-build
 
   package:
     name: Build, scan, sign, publish (${{ matrix.component }}, ${{ matrix.architecture }})
