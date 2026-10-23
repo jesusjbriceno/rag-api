@@ -16,11 +16,11 @@ internal static class AdminBrowserGuard
         HttpContext context, CloudflareAccessValidator validator, AdminBffOptions options)
     {
         // A browser must never be able to declare its own identity. Reject any of the
-        // proxy's forbidden identity headers outright. The Cloudflare credential itself
-        // is the single identity header: it is consumed here and never forwarded upstream.
-        if (context.Request.Headers.Keys.Any(name =>
-                AdminIdentityHeaderPolicy.IsForbidden(name) &&
-                !string.Equals(name, "Cf-Access-Jwt-Assertion", StringComparison.OrdinalIgnoreCase)))
+        // forbidden identity headers except the ones Cloudflare Access injects on every
+        // request reaching this origin: the edge sets them itself, so their presence is
+        // not a browser claim. Only the Cloudflare credential is trusted, and the proxy
+        // never forwards any of these headers upstream.
+        if (context.Request.Headers.Keys.Any(AdminIdentityHeaderPolicy.IsForbiddenFromBrowser))
         {
             return (string.Empty, AdminBffProblems.Create(StatusCodes.Status400BadRequest, "forbidden_identity_header"));
         }
