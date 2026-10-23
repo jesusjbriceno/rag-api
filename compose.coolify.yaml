@@ -132,6 +132,13 @@ services:
       CloudflareAccess__Audience: ${CLOUDFLAREACCESS__AUDIENCE:-}
       CloudflareAccess__Keys__0__KeyId: ${CLOUDFLAREACCESS__KEYS__0__KEY_ID:-}
       CloudflareAccess__Keys__0__PublicKeyPem: ${CLOUDFLAREACCESS__KEYS__0__PUBLIC_KEY_PEM:-}
+      # Cloudflare publishes more than one signing key while it rotates them, and it signs
+      # with whichever is active. Configure the second published key here so a rotation
+      # does not lock every administrator out with a 401 from the credential validator.
+      # Both values must be supplied together (kid + PEM) when set: the host fails closed
+      # at startup on a key it cannot import.
+      CloudflareAccess__Keys__1__KeyId: ${CLOUDFLAREACCESS__KEYS__1__KEY_ID:-}
+      CloudflareAccess__Keys__1__PublicKeyPem: ${CLOUDFLAREACCESS__KEYS__1__PUBLIC_KEY_PEM:-}
       AdminAssertion__Issuer: ${ADMINASSERTION__ISSUER:-}
       AdminAssertion__Audience: ${ADMINASSERTION__AUDIENCE:-}
       AdminAssertion__AppId: ${ADMINBFF__SIGNING__APP_ID:-}
