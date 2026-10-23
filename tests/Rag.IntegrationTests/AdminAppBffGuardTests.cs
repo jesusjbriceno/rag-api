@@ -91,6 +91,29 @@ public sealed class AdminAppBffGuardTests : IDisposable
     }
 
     [Fact]
+    public async Task Cloudflare_injected_identity_headers_are_tolerated_and_never_forwarded_upstream()
+    {
+        // Cloudflare Access injects these on every request that reaches the origin, so a
+        // legitimate browser request always carries them. They are not a browser identity
+        // claim: only the credential is trusted, and no edge header may be forwarded.
+        var credential = AdminAppBffTestRequests.CreateCloudflareToken(_factory.CfKey, AdminAppBffFactory.AllowedSubject, DateTimeOffset.UtcNow);
+
+        var withEmail = await _client.PostAsync("/api/admin/clients", "{\"name\":\"acme\"}", credential, AdminAppBffFactory.AllowedOrigin, "Cf-Access-Authenticated-User-Email", "attacker@example.com");
+        var withGroups = await _client.PostAsync("/api/admin/clients", "{\"name\":\"acme\"}", credential, AdminAppBffFactory.AllowedOrigin, "Cf-Access-Authenticated-User-Groups", "admins");
+
+        Assert.Equal(HttpStatusCode.Created, withEmail.StatusCode);
+        Assert.Equal(HttpStatusCode.Created, withGroups.StatusCode);
+
+        Assert.Equal(2, _factory.Upstream.Requests.Count);
+        foreach (var recorded in _factory.Upstream.Requests)
+        {
+            Assert.DoesNotContain("Cf-Access-Authenticated-User-Email", recorded.Headers.Keys, StringComparer.OrdinalIgnoreCase);
+            Assert.DoesNotContain("Cf-Access-Authenticated-User-Groups", recorded.Headers.Keys, StringComparer.OrdinalIgnoreCase);
+            Assert.DoesNotContain("Cf-Access-Jwt-Assertion", recorded.Headers.Keys, StringComparer.OrdinalIgnoreCase);
+        }
+    }
+
+    [Fact]
     public async Task Cross_site_mutations_are_rejected_without_reaching_the_admin_api()
     {
         var credential = AdminAppBffTestRequests.CreateCloudflareToken(_factory.CfKey, AdminAppBffFactory.AllowedSubject, DateTimeOffset.UtcNow);
