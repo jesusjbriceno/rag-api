@@ -1,21 +1,21 @@
-# Deploy the private RAG stack with Coolify
+# Deploy the RAG stack with Coolify
 
-Deploy this Compose stack privately, then let approved client stacks reach the API over Coolify's predefined network. Every container of the stack joins that shared network, so keeping PostgreSQL and llama.cpp off the client integration surface is a policy, not an enforced network boundary.
+Keep the API and data plane private while routing the admin browser surface through Coolify's proxy and Cloudflare Access. For the current test, only `rag-adminapp` receives the public hostname `admin-rag.kitin.es`; the API, PostgreSQL, and llama.cpp remain without public domains or host-published ports. Every container joins Coolify's predefined network, so keeping data services off the client integration surface is a policy, not an enforced network boundary.
 
 This guide is the Coolify adapter of the [environment contract](environment-contract.md). The stack contract and the client integration contract live in that document; everything here is how one platform instantiates them, and no part of it is required by the application code.
 
 ## Quick path
 
 1. Create a Coolify **Service Stack** from this repository using `compose.coolify.yaml`.
-2. Add the required deployment secrets and matching immutable image references in Coolify (see [Image publication, verification, and rollback](#image-publication-verification-and-rollback)); deploy without domains or port mappings.
-3. Wait for `rag-model-download` and `rag-migrate` to complete successfully; llama.cpp and then the API start. The API must become ready.
+2. Add the required deployment secrets and matching immutable image references in Coolify (see [Image publication, verification, and rollback](#image-publication-verification-and-rollback)). In Coolify **Domains**, route HTTPS `admin-rag.kitin.es` to service `rag-adminapp` on internal port `8080`, and protect that hostname with Cloudflare Access. Keep the API/data services without domains or host-published ports; see the [AdminApp runbook](adminapp-mvp.md).
+3. Wait for `rag-model-download` and `rag-migrate` to complete successfully; llama.cpp, the API, and `rag-adminapp` must become healthy.
 4. Enable **Connect to Predefined Network** on both the RAG and client service stacks. On that shared network the API answers to its service name, so set `RAG_API_BASE_URL=http://rag-api:8080` in the client stack's environment.
 
 ## Shared network, prefixed names, and no custom networks
 
 When **Connect to Predefined Network** is enabled, Coolify attaches every container of this stack to its shared destination network; it does not alter the Compose file (coollabsio/coolify#5597). Every service name in `compose.coolify.yaml` is therefore resolvable from every other stack joined to that network — including the data services.
 
-An unprefixed name such as `postgres` collides on that network with Coolify's own database container `coolify-db`, and Docker DNS round-robins between them (coollabsio/coolify#5160). That is why every service in `compose.coolify.yaml` is prefixed with `rag-` (`rag-postgres`, `rag-model-download`, `rag-llama-cpp`, `rag-migrate`, `rag-api`), matching Coolify's documented mitigation that "Names can be prefixed to prevent collisions".
+An unprefixed name such as `postgres` collides on that network with Coolify's own database container `coolify-db`, and Docker DNS round-robins between them (coollabsio/coolify#5160). That is why every service in `compose.coolify.yaml` is prefixed with `rag-` (`rag-postgres`, `rag-model-download`, `rag-llama-cpp`, `rag-migrate`, `rag-api`, `rag-adminapp`), matching Coolify's documented mitigation that "Names can be prefixed to prevent collisions".
 
 **Do not declare custom networks.** Adding a `networks:` section to `compose.coolify.yaml` is not a valid isolation fix: Coolify's proxy only joins the resource-specific network, so custom networks cause intermittent HTTPS outages (https://coolify.io/docs/applications/build-packs/docker-compose, "Do Not Define Custom Networks"). `scripts/validate-coolify-compose.py` therefore rejects any `networks:` declaration other than the implicit default.
 
@@ -70,7 +70,7 @@ Do not bypass the migration with direct SQL. A later release must provide a deli
 
 ## Private cross-stack procedure
 
-1. Keep all RAG services without domains and without host-published ports. `compose.coolify.yaml` already enforces this.
+1. Keep `rag-api` and the data/model services without domains or host-published ports. The sole routed service is `rag-adminapp`: add `https://admin-rag.kitin.es` in Coolify's **Domains** configuration, select `rag-adminapp`, and target internal port `8080`. This proxy route does not publish a Docker host port; Cloudflare Access must guard the hostname.
 2. Deploy the RAG stack. On the shared network the API resolves by its service name, `rag-api`. Verify that a client container resolves it (`getent hosts rag-api`) instead of assuming the Coolify-generated container name resolves across stacks; field verification showed the long generated name resolving only inside the stack's own Compose project.
 3. In the RAG service stack settings, enable **Connect to Predefined Network**.
 4. In each approved client stack, enable the same option.
@@ -133,7 +133,7 @@ Three least-privilege GitHub Actions workflows publish only verified images.
 | Workflow | Trigger | Publishes |
 | --- | --- | --- |
 | `ci-pr.yml` | Pull request to `develop` | Nothing — build and test gate only. |
-| `ci-develop.yml` | Push to `develop` | `develop-<40-char-sha>` pre-release images after SonarQube, Trivy, sign, and attest. |
+| `ci-develop.yml` | Push to `develop` | `develop-<40-char-sha>` pre-release images after Trivy, sign, and attest. SonarQube runs only when the `SONAR_ENABLED` repository variable is set; the analysis server is currently retired. |
 | `ci-release.yml` | Semver tag push `v*` | Immutable `vX.Y.Z` images plus a GitHub Release; `-rc.N` tags are pre-releases. |
 
 Every `linux/amd64` and native `linux/arm64` variant is scanned with Trivy (HIGH/CRITICAL blocks publication), keyless-signed with cosign, and carries a SPDX SBOM and SLSA v1 provenance attestation. Only after both variants pass does publication assemble a signed multi-platform OCI index with SLSA provenance under the ordinary immutable tag. An existing architecture tag or ordinary index tag is never moved to a different digest.
@@ -142,15 +142,15 @@ The ordinary `vX.Y.Z` or `develop-<sha>` reference is the deployment contract. I
 
 ### Publication completion record
 
-A visible GHCR tag is not publication-completion evidence. Each successful dual-image finalization writes one durable GitHub Deployment record with `environment` and `task` both set to `publication-completion`; its deployment ID is the completion-marker identity. The marker payload records the source revision, workflow run ID and URL, both ordinary multi-platform index references and digests, and each AMD64/ARM64 digest plus its architecture tag. It records attached signature/SPDX/SLSA evidence for platform manifests and signature/SLSA evidence for the index.
+A visible GHCR tag is not publication-completion evidence. Each successful three-image finalization writes one durable GitHub Deployment record with `environment` and `task` both set to `publication-completion`; its deployment ID is the completion-marker identity. The marker payload records the source revision, workflow run ID and URL, all three ordinary multi-platform index references and digests (`api`, `operator`, `adminapp`), each AMD64/ARM64 digest plus its architecture tag, and attached signature/SPDX/SLSA evidence.
 
-The marker is written only after both API and operator final tags resolve to their respective immutable digests. Re-runs for the same source and image pair reuse the existing successful marker; records are retained as publication evidence and are not pruned with GHCR tags or workflow artifacts. `ci-develop.yml` never creates a GitHub Release. The release workflow creates its GitHub Release only after its completion marker exists.
+The marker is written only after the API, operator, and adminapp final tags resolve to their respective immutable digests. Re-runs for the same source and three-image set reuse the existing successful marker; records are retained as publication evidence and are not pruned with GHCR tags or workflow artifacts. `ci-develop.yml` never creates a GitHub Release. The release workflow creates its GitHub Release only after its completion marker exists.
 
 Signature, SPDX, and SLSA verification runs afterwards in a separate read-only verification job. It verifies signatures and SLSA for each index plus signatures, SPDX, and SLSA for all four platform manifests. Its check run reports `verified`, `failed`, or `unknown`; it has no permission to write packages, tags, releases, or deployment markers, so its result cannot alter completion. A failed or unknown verification result must be investigated before deployment even though it does not rewrite the durable publication record.
 
 ### Verify signatures and SBOM
 
-Verify a release tag before pinning it. Repeat for both `rag-api` and `rag-operator`.
+Verify a release tag before pinning it. Repeat for all three repositories: `rag-api`, `rag-operator`, and `rag-adminapp`.
 
 ```bash
 IDENTITY="https://github.com/jesusjbriceno/rag-api/.github/workflows/ci-release.yml@refs/tags/v0.1.0-rc.1"
@@ -194,28 +194,28 @@ The manifest output must list `linux/amd64` and `linux/arm64`. Use the marker's 
 
 ### Pin an immutable image
 
-`compose.coolify.yaml` accepts only the two exact application repositories with `pull_policy: always`. Set both Coolify environment variables using one of these supported reference models:
+`compose.coolify.yaml` accepts only the three exact application repositories with `pull_policy: always`. Set the Coolify image-reference variables from one verified release using one of these supported reference models:
 
-| Model | `RAG_API_IMAGE_REFERENCE` | `RAG_OPERATOR_IMAGE_REFERENCE` | Use when |
-| --- | --- | --- | --- |
-| Coordinated immutable tags | `:v0.1.0-rc.1` | `:v0.1.0-rc.1` | Normal deployment and rollback. The tags must match. |
-| Repository-specific index digest pins | `@sha256:<api-index-64-lowercase-hex>` | `@sha256:<operator-index-64-lowercase-hex>` | Maximum pinning after recording and verifying both published multi-platform indexes. |
+| Model | `RAG_API_IMAGE_REFERENCE` | `RAG_OPERATOR_IMAGE_REFERENCE` | `RAG_ADMINAPP_IMAGE_REFERENCE` | Use when |
+| --- | --- | --- | --- | --- |
+| Coordinated immutable tags | `:v0.1.0-rc.1` | `:v0.1.0-rc.1` | `:v0.1.0-rc.1` | Normal deployment and rollback. All tags must match. |
+| Repository-specific index digest pins | `@sha256:<api-index-64-lowercase-hex>` | `@sha256:<operator-index-64-lowercase-hex>` | `@sha256:<adminapp-index-64-lowercase-hex>` | Maximum pinning after recording and verifying all three published multi-platform indexes. |
 
-For a develop pre-release, use the same `:develop-<40-lowercase-hex-sha>` suffix for both variables. Never use `latest`, an empty suffix, a floating channel, a malformed digest, a tag combined with a digest, or one tag reference with one digest reference. The validator rejects those forms and any repository other than the API and operator repositories above.
+`RAG_ADMINAPP_IMAGE_REFERENCE` may be omitted to follow the API tag; for explicit digest pins, set all three image references from the same completion marker. For a develop pre-release, use the same `:develop-<40-lowercase-hex-sha>` suffix for all three variables. Never use `latest`, an empty suffix, a floating channel, a malformed digest, a tag combined with a digest, or mixed reference models. The validator rejects those forms and any repository other than the API, operator, and adminapp repositories above.
 
-**Dokploy ARM64 happy path:** verify each ordinary release or develop tag with cosign, confirm each manifest lists `linux/amd64` and `linux/arm64`, then set both suffixes to their repository-specific **index** `@sha256:...` values from one completion marker. Deploy the unchanged pull-only Compose stack. `pull_policy: always` pulls the index and Docker selects ARM64 automatically; Dokploy never falls back to a local build.
+**Dokploy ARM64 happy path:** verify each ordinary release or develop tag with cosign, confirm each manifest lists `linux/amd64` and `linux/arm64`, then set all three suffixes to their repository-specific **index** `@sha256:...` values from one completion marker. Deploy the unchanged pull-only Compose stack. `pull_policy: always` pulls the index and Docker selects ARM64 automatically; Dokploy never falls back to a local build.
 
 ### Roll back
 
 1. Verify the previous release tag with cosign and its required attestations.
-2. Set both image-reference variables to the same previous `:vX.Y.Z` suffix, then redeploy the stack.
+2. Set all three image-reference variables to the same previous `:vX.Y.Z` suffix, then redeploy the stack.
 3. Confirm `GET /api/v1/health/ready` returns `200`.
 
-Rollback re-pulls the previously verified immutable tag. A pull failure fails deployment without falling back to a local build. For digest-pinned deployment, copy both ordinary multi-platform index `digest_ref` values from the same durable `publication-completion` record, verify and inspect each index, set each variable to its `@sha256:...` suffix, and redeploy. Confirm `GET /api/v1/health/ready` returns `200`.
+Rollback re-pulls the previously verified immutable tag. A pull failure fails deployment without falling back to a local build. For digest-pinned deployment, copy all three ordinary multi-platform index `digest_ref` values from the same durable `publication-completion` record, verify and inspect each index, set each variable to its `@sha256:...` suffix, and redeploy. Confirm `GET /api/v1/health/ready` returns `200`.
 
 ## Out of scope
 
-- Public domains or host-published RAG service ports.
+- Public domains for API/data services or host-published RAG service ports. The AdminApp hostname is the sole exception and must be protected by Cloudflare Access.
 - Custom Coolify Compose networks.
 - GPU/NVIDIA runtime configuration.
 - General-infrastructure model runtime or automation deployment.

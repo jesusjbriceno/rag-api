@@ -1,0 +1,49 @@
+:root {
+  color-scheme: light dark;
+  font-family: system-ui, sans-serif;
+  line-height: 1.5;
+}
+
+body {
+  margin: 0 auto;
+  max-width: 40rem;
+  padding: 1.5rem;
+}
+
+form {
+  display: grid;
+  gap: 0.75rem;
+}
+
+label {
+  display: grid;
+  gap: 0.25rem;
+  font-weight: 600;
+}
+
+input {
+  font: inherit;
+  font-weight: 400;
+  padding: 0.4rem 0.6rem;
+}
+
+button {
+  font: inherit;
+  padding: 0.45rem 0.9rem;
+}
+
+button:disabled {
+  opacity: 0.5;
+}
+
+[role="alert"] {
+  padding: 0.75rem;
+  border: 1px solid currentColor;
+}
+
+.issued-secret {
+  display: grid;
+  gap: 0.75rem;
+  padding: 0.75rem;
+  border: 2px solid currentColor;
+}

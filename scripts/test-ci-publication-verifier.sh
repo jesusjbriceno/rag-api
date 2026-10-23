@@ -61,6 +61,7 @@ write_proof() {
 }
 
 write_proof api ghcr.io/example/rag-api sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa >"${proof_dir}/api.json"
+write_proof adminapp ghcr.io/example/rag-adminapp sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee >"${proof_dir}/adminapp.json"
 write_proof operator ghcr.io/example/rag-operator sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb >"${proof_dir}/operator.json"
 
 run_remote() {
@@ -116,5 +117,8 @@ run_case verified 0 verified
 run_case failed 1 failed
 run_case unknown 0 unknown-timeout
 run_case unknown 0 unknown-access
+
+rm "${proof_dir}/adminapp.json"
+run_case unknown 0 missing-admin
 
 printf '%s\n' 'ci publication verifier tests passed'

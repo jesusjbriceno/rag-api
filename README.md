@@ -53,7 +53,7 @@ Three least-privilege GitHub Actions workflows publish only verified images to G
 | Workflow | Trigger | Result |
 | --- | --- | --- |
 | `ci-pr.yml` | Pull request to `develop` | Build + test gate only; no publish, no SonarQube. |
-| `ci-develop.yml` | Push to `develop` | Build/test/SonarQube, then publishes `develop-<sha>` pre-release images. |
+| `ci-develop.yml` | Push to `develop` | Build/test, plus SonarQube when the `SONAR_ENABLED` repository variable is set, then publishes `develop-<sha>` pre-release images. |
 | `ci-release.yml` | Semver tag `v*` push | Build/test, then publishes immutable `vX.Y.Z` images and creates a GitHub Release (`-rc.N` tags are pre-releases). |
 
 Every `linux/amd64` and native `linux/arm64` image is independently Trivy-scanned (HIGH/CRITICAL blocks publication), keyless-signed with cosign, and carries a SPDX SBOM plus SLSA provenance attestation. After both platform jobs pass, the ordinary immutable tag becomes a signed multi-platform OCI index with SLSA provenance. The `-amd64` and `-arm64` suffix tags are traceability references; deployments use the ordinary tag or its index digest.
