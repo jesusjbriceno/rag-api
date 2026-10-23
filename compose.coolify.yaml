@@ -80,6 +80,13 @@ services:
     environment:
       <<: *rag-environment
       AdminPlane__Enabled: ${ADMINPLANE__ENABLED:-false}
+      # Retention keeps the admin audit trail and the operation journal bounded. The API
+      # validates these at startup when the plane is enabled and refuses to start when
+      # they are invalid, so deployment defaults live here rather than relying on image
+      # defaults that a deployment environment can silently blank out.
+      AdminAudit__RetentionMode: ${ADMINAUDIT__RETENTION_MODE:-days}
+      AdminAudit__RetentionDays: ${ADMINAUDIT__RETENTION_DAYS:-90}
+      AdminOperations__RetentionHours: ${ADMINOPERATIONS__RETENTION_HOURS:-720}
       AdminAppAuth__Apps__0__AppId: ${ADMINAPPAUTH__APPS__0__APP_ID:-}
       AdminAppAuth__Apps__0__KeyId: ${ADMINAPPAUTH__APPS__0__KEY_ID:-}
       AdminAppAuth__Apps__0__CurrentSecret: ${ADMINAPPAUTH__APPS__0__CURRENT_SECRET:-}
